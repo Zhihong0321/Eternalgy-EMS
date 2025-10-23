@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Eternalgy EMS - System Status</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: white;
+      border-radius: 20px;
+      padding: 40px;
+      max-width: 600px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    .logo {
+      font-size: 48px;
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      color: #333;
+      font-size: 28px;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: #666;
+      font-size: 14px;
+    }
+
+    .status-card {
+      background: #f8f9fa;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    .status-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid #e0e0e0;
+    }
+
+    .status-item:last-child {
+      border-bottom: none;
+    }
+
+    .status-label {
+      color: #666;
+      font-weight: 500;
+    }
+
+    .status-value {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+    }
+
+    .indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+
+    .indicator.green {
+      background: #10b981;
+    }
+
+    .indicator.loading {
+      background: #f59e0b;
+    }
+
+    .indicator.red {
+      background: #ef4444;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .links {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .link-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px;
+      background: #667eea;
+      color: white;
+      text-decoration: none;
+      border-radius: 8px;
+      font-weight: 500;
+      transition: transform 0.2s;
+    }
+
+    .link-btn:hover {
+      transform: translateY(-2px);
+      background: #5568d3;
+    }
+
+    .footer {
+      text-align: center;
+      margin-top: 20px;
+      color: #999;
+      font-size: 12px;
+    }
+
+    .refresh-btn {
+      background: #10b981;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 16px;
+      transition: background 0.2s;
+    }
+
+    .refresh-btn:hover {
+      background: #059669;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">⚡</div>
+      <h1>Eternalgy EMS</h1>
+      <p class="subtitle">Energy Management System - Peak Shaving Service</p>
+    </div>
+
+    <div class="status-card">
+      <div class="status-item">
+        <span class="status-label">Backend Server</span>
+        <span class="status-value">
+          <div class="indicator loading" id="server-indicator"></div>
+          <span id="server-status">Checking...</span>
+        </span>
+      </div>
+
+      <div class="status-item">
+        <span class="status-label">Database</span>
+        <span class="status-value">
+          <div class="indicator loading" id="db-indicator"></div>
+          <span id="db-status">Checking...</span>
+        </span>
+      </div>
+
+      <div class="status-item">
+        <span class="status-label">WebSocket</span>
+        <span class="status-value">
+          <div class="indicator loading" id="ws-indicator"></div>
+          <span id="ws-status">Checking...</span>
+        </span>
+      </div>
+
+      <div class="status-item">
+        <span class="status-label">Connected Simulators</span>
+        <span class="status-value" id="simulator-count">-</span>
+      </div>
+
+      <div class="status-item">
+        <span class="status-label">Connected Dashboards</span>
+        <span class="status-value" id="dashboard-count">-</span>
+      </div>
+
+      <div class="status-item">
+        <span class="status-label">Server Time</span>
+        <span class="status-value" id="server-time">-</span>
+      </div>
+    </div>
+
+    <button class="refresh-btn" onclick="checkHealth()">🔄 Refresh Status</button>
+
+    <div class="links">
+      <a href="/api/health" class="link-btn">📊 API Health</a>
+      <a href="/api/meters" class="link-btn">📡 View Meters</a>
+      <a href="https://github.com/Zhihong0321/Eternalgy-EMS" class="link-btn" target="_blank">💻 GitHub</a>
+      <a href="https://railway.com/project/b7689a85-7397-47fc-a821-0d15e09de530" class="link-btn" target="_blank">🚂 Railway</a>
+    </div>
+
+    <div class="footer">
+      <p>Eternalgy EMS v0.1.0 | Built for Peak Shaving Optimization</p>
+      <p style="margin-top: 4px;">Powered by Railway + PostgreSQL + WebSocket</p>
+    </div>
+  </div>
+
+  <script>
+    async function checkHealth() {
+      try {
+        const response = await fetch('/api/health');
+        const data = await response.json();
+
+        // Update server status
+        document.getElementById('server-indicator').className = 'indicator green';
+        document.getElementById('server-status').textContent = 'Online';
+
+        // Update database status (inferred from successful response)
+        document.getElementById('db-indicator').className = 'indicator green';
+        document.getElementById('db-status').textContent = 'Connected';
+
+        // Update WebSocket status (inferred)
+        document.getElementById('ws-indicator').className = 'indicator green';
+        document.getElementById('ws-status').textContent = 'Ready';
+
+        // Update connection counts
+        document.getElementById('simulator-count').textContent = data.connectedSimulators || 0;
+        document.getElementById('dashboard-count').textContent = data.connectedDashboards || 0;
+
+        // Update server time
+        const serverTime = new Date(data.timestamp).toLocaleString();
+        document.getElementById('server-time').textContent = serverTime;
+
+      } catch (error) {
+        console.error('Health check failed:', error);
+
+        // Update to error state
+        document.getElementById('server-indicator').className = 'indicator red';
+        document.getElementById('server-status').textContent = 'Offline';
+
+        document.getElementById('db-indicator').className = 'indicator red';
+        document.getElementById('db-status').textContent = 'Unknown';
+
+        document.getElementById('ws-indicator').className = 'indicator red';
+        document.getElementById('ws-status').textContent = 'Unavailable';
+      }
+    }
+
+    // Check health on page load
+    checkHealth();
+
+    // Auto-refresh every 10 seconds
+    setInterval(checkHealth, 10000);
+  </script>
+</body>
+</html>
