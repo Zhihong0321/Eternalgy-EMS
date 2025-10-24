@@ -26,7 +26,7 @@ app.use(cors({
   origin: process.env.ALLOWED_ORIGINS?.split(',') || '*'
 }));
 app.use(express.json());
-app.use(express.static('public')); // Serve static files for simulator/dashboard
+app.use(express.static(require('path').join(__dirname, '../public'))); // Serve static files for simulator/dashboard
 
 // Mount debug API routes
 // ⚠️ WARNING: These should be protected or disabled in production!
