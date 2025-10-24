@@ -5,13 +5,6 @@
   "private": true,
   "scripts": {
     "start": "cd backend && npm start",
-    "dev": "cd backend && npm run dev",
-    "postinstall": "npm run build:frontend",
-    "build:frontend": "cd frontend && npm install && npm run build && npm run copy:dist",
-    "copy:dist": "cd frontend && node -e \"require('fs').cpSync('dist', '../backend/public', {recursive: true, force: true})\""
-  },
-  "workspaces": [
-    "backend",
-    "frontend"
-  ]
+    "dev": "cd backend && npm run dev"
+  }
 }
