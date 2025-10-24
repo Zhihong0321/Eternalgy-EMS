@@ -6,9 +6,9 @@
   "scripts": {
     "start": "cd backend && npm start",
     "dev": "cd backend && npm run dev",
-    "install:backend": "cd backend && npm install",
-    "install:frontend": "cd frontend && npm install",
-    "build:frontend": "cd frontend && npm run build"
+    "postinstall": "npm run build:frontend",
+    "build:frontend": "cd frontend && npm install && npm run build && npm run copy:dist",
+    "copy:dist": "cd frontend && node -e \"require('fs').cpSync('dist', '../backend/public', {recursive: true, force: true})\""
   },
   "workspaces": [
     "backend",
