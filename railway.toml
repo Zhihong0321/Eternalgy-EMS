@@ -1,12 +1,9 @@
-# Railway Configuration for Eternalgy EMS Backend
+# Railway Configuration for Eternalgy EMS
+# This file is for the root service - Railway will auto-detect backend and frontend as separate services
 
 [build]
 builder = "NIXPACKS"
-nixpacksConfigPath = "backend/nixpacks.toml"
-watchPaths = ["backend/**"]
 
 [deploy]
-healthcheckPath = "/api/health"
-healthcheckTimeout = 100
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
