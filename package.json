@@ -1,0 +1,17 @@
+{
+  "name": "eternalgy-ems",
+  "version": "0.1.0",
+  "description": "Energy Management System - Monorepo",
+  "private": true,
+  "scripts": {
+    "start": "cd backend && npm start",
+    "dev": "cd backend && npm run dev",
+    "install:backend": "cd backend && npm install",
+    "install:frontend": "cd frontend && npm install",
+    "build:frontend": "cd frontend && npm run build"
+  },
+  "workspaces": [
+    "backend",
+    "frontend"
+  ]
+}
