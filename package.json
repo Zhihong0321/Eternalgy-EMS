@@ -4,6 +4,7 @@
   "description": "Energy Management System - Monorepo",
   "private": true,
   "scripts": {
+    "postinstall": "cd backend && npm install",
     "start": "cd backend && npm start",
     "dev": "cd backend && npm run dev"
   }
