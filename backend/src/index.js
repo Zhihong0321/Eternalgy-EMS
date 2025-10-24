@@ -12,6 +12,9 @@ const cors = require('cors');
 const { getOrCreateMeter, insertReading, getCurrentBlock, getBlocksForToday } = require('./db/queries');
 const { calculateCurrentBlock, isPeakHour, getCurrentBlockStart, getBlockEnd } = require('./services/blockAggregator');
 
+// Import debug API routes
+const debugRouter = require('./api/debug');
+
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
@@ -24,6 +27,10 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.static('public')); // Serve static files for simulator/dashboard
+
+// Mount debug API routes
+// ⚠️ WARNING: These should be protected or disabled in production!
+app.use('/api/debug', debugRouter);
 
 // Store connected clients by type
 const clients = {
