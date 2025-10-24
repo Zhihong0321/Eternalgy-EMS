@@ -14,6 +14,10 @@ RUN npm ci --legacy-peer-deps
 # Copy source code
 COPY . .
 
+# Set production environment variables
+ENV VITE_API_URL=https://eternalgy-ems-production.up.railway.app
+ENV VITE_WS_URL=wss://eternalgy-ems-production.up.railway.app
+
 # Build application
 RUN npm run build
 
