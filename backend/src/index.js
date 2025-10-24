@@ -179,11 +179,18 @@ async function handleMeterReading(data, ws) {
 
 // Health check
 app.get('/api/health', (req, res) => {
+  const path = require('path');
+  const fs = require('fs');
+  const publicDir = path.join(__dirname, '../public');
+
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     connectedSimulators: clients.simulators.size,
-    connectedDashboards: clients.dashboards.size
+    connectedDashboards: clients.dashboards.size,
+    publicDir: publicDir,
+    publicDirExists: fs.existsSync(publicDir),
+    publicFiles: fs.existsSync(publicDir) ? fs.readdirSync(publicDir) : []
   });
 });
 
