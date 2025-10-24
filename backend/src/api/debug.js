@@ -466,6 +466,50 @@ router.get('/utils/peak-hours-today', (req, res) => {
 
 /**
  * ========================================
+ * DATABASE MIGRATION
+ * ========================================
+ */
+
+// Run database migration remotely
+router.post('/db/migrate', async (req, res) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+
+    const confirm = req.query.confirm === 'yes';
+
+    if (!confirm) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please add ?confirm=yes to run migration',
+        warning: 'This will create/modify database tables'
+      });
+    }
+
+    // Read schema file
+    const schemaPath = path.join(__dirname, '..', 'db', 'schema.sql');
+    const schema = fs.readFileSync(schemaPath, 'utf8');
+
+    // Execute schema
+    await query(schema);
+
+    res.json({
+      status: 'success',
+      message: 'Migration completed successfully',
+      tables: ['meters', 'energy_readings', 'thirty_min_blocks'],
+      note: 'Database schema created/updated'
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+/**
+ * ========================================
  * DATA CLEANUP & MANAGEMENT
  * ========================================
  */
