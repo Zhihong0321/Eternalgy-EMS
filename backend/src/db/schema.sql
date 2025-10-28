@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS meters (
   device_id VARCHAR(50) UNIQUE NOT NULL,
   client_name VARCHAR(255),
   is_simulator BOOLEAN DEFAULT FALSE,
+  reading_interval INTEGER DEFAULT 60,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -20,6 +21,7 @@ CREATE TABLE IF NOT EXISTS energy_readings (
   timestamp BIGINT NOT NULL,
   total_power_kw DECIMAL(10,2) NOT NULL,
   frequency DECIMAL(5,2),
+  reading_interval INTEGER DEFAULT 60,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -84,5 +86,7 @@ ON CONFLICT (device_id) DO NOTHING;
 COMMENT ON TABLE meters IS 'Registered energy meters and simulators';
 COMMENT ON TABLE energy_readings IS 'Raw 1-minute power readings (kW)';
 COMMENT ON TABLE thirty_min_blocks IS 'Aggregated 30-minute energy consumption (kWh)';
+COMMENT ON COLUMN meters.reading_interval IS 'Current reading interval in seconds for this meter (e.g., 60 = 1 minute)';
+COMMENT ON COLUMN energy_readings.reading_interval IS 'Reading interval in seconds used for this reading';
 COMMENT ON COLUMN thirty_min_blocks.total_kwh IS 'Calculated as: Σ(power_kw) × (1/60)';
 COMMENT ON COLUMN thirty_min_blocks.is_peak_hour IS 'Peak hours: 2:00 PM - 10:00 PM (14:00-22:00)';

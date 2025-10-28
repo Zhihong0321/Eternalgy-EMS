@@ -176,17 +176,25 @@ wss.on('connection', (ws, req) => {
  * Handle meter reading from simulator
  */
 async function handleMeterReading(data, ws) {
-  const { deviceId, totalPowerKw, timestamp, frequency } = data;
+  const { deviceId, totalPowerKw, timestamp, frequency, readingInterval } = data;
 
   // Get or create meter
   const meter = await getOrCreateMeter(deviceId, true);
 
-  // Insert reading
+  // Update meter's reading interval if provided
+  if (readingInterval && meter.reading_interval !== readingInterval) {
+    const { updateMeterReadingInterval } = require('./db/queries');
+    await updateMeterReadingInterval(meter.id, readingInterval);
+    console.log(`📝 Updated meter ${deviceId} interval to ${readingInterval}s`);
+  }
+
+  // Insert reading with interval
   const reading = await insertReading(
     meter.id,
     timestamp,
     totalPowerKw,
-    frequency
+    frequency,
+    readingInterval || 60
   );
 
   console.log(`📈 Reading received: ${deviceId} - ${totalPowerKw} kW`);

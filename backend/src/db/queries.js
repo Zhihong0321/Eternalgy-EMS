@@ -27,17 +27,29 @@ async function getAllMeters() {
   return result.rows;
 }
 
+// Update meter reading interval
+async function updateMeterReadingInterval(meterId, readingInterval) {
+  const result = await query(
+    `UPDATE meters
+     SET reading_interval = $1, updated_at = NOW()
+     WHERE id = $2
+     RETURNING *`,
+    [readingInterval, meterId]
+  );
+  return result.rows[0];
+}
+
 /**
  * Energy Readings
  */
 
 // Insert a new energy reading
-async function insertReading(meterId, timestamp, totalPowerKw, frequency = null) {
+async function insertReading(meterId, timestamp, totalPowerKw, frequency = null, readingInterval = 60) {
   const result = await query(
-    `INSERT INTO energy_readings (meter_id, timestamp, total_power_kw, frequency)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO energy_readings (meter_id, timestamp, total_power_kw, frequency, reading_interval)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
-    [meterId, timestamp, totalPowerKw, frequency]
+    [meterId, timestamp, totalPowerKw, frequency, readingInterval]
   );
   return result.rows[0];
 }
@@ -169,6 +181,7 @@ module.exports = {
   // Meters
   getOrCreateMeter,
   getAllMeters,
+  updateMeterReadingInterval,
 
   // Readings
   insertReading,

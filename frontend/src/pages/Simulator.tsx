@@ -19,6 +19,7 @@ export default function Simulator() {
   const [isRunning, setIsRunning] = useState(false)
   const [volatility, setVolatility] = useState(10) // % variation
   const [interval, setInterval] = useState(60) // seconds
+  const [previousInterval, setPreviousInterval] = useState(60) // track previous interval
   const [sentCount, setSentCount] = useState(0)
   const [simulationMode, setSimulationMode] = useState<'auto' | 'manual'>('auto')
   const [fastForwardSpeed, setFastForwardSpeed] = useState(1) // 1x to 30x
@@ -40,6 +41,47 @@ export default function Simulator() {
       setSentCount((prev) => prev + 1)
     }
   }, [lastMessage])
+
+  // Auto-wipe data when interval changes
+  useEffect(() => {
+    const handleIntervalChange = async () => {
+      if (interval !== previousInterval && !isRunning) {
+        const confirmed = window.confirm(
+          `Interval changed from ${previousInterval}s to ${interval}s.\n\n` +
+          `To prevent data conflicts, all previous data for this simulator will be wiped.\n\n` +
+          `Continue?`
+        )
+
+        if (confirmed) {
+          try {
+            const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+            const response = await fetch(`${API_URL}/api/simulators/data`, {
+              method: 'DELETE'
+            })
+
+            if (response.ok) {
+              const result = await response.json()
+              console.log(`Wiped data for ${result.deleted} simulator meters`)
+              setPreviousInterval(interval)
+              setSentCount(0)
+            } else {
+              throw new Error('Failed to wipe data')
+            }
+          } catch (error) {
+            console.error('Error wiping simulator data:', error)
+            alert('Failed to wipe simulator data. Please try using the wipe button in the Dashboard.')
+            // Revert interval change
+            setInterval(previousInterval)
+          }
+        } else {
+          // Revert interval change
+          setInterval(previousInterval)
+        }
+      }
+    }
+
+    handleIntervalChange()
+  }, [interval, previousInterval, isRunning])
 
   // Auto-send readings when running
   useEffect(() => {
@@ -66,6 +108,7 @@ export default function Simulator() {
           totalPowerKw: parseFloat(finalPower.toFixed(2)),
           timestamp: Date.now() + timeOffset,
           frequency: parseFloat(frequency.toFixed(2)),
+          readingInterval: interval,
         })
       }
     }, effectiveInterval)
@@ -83,6 +126,7 @@ export default function Simulator() {
       totalPowerKw: parseFloat(currentPower.toFixed(2)),
       timestamp: Date.now(),
       frequency: parseFloat(frequency.toFixed(2)),
+      readingInterval: interval,
     })
   }
 

@@ -40,6 +40,7 @@ export default function Dashboard() {
   const [allMeters, setAllMeters] = useState<any[]>([])
   const [selectedMeterId, setSelectedMeterId] = useState<number | null>(null)
   const [lastTenBlocks, setLastTenBlocks] = useState<Block[]>([])
+  const [currentInterval, setCurrentInterval] = useState<number>(60) // Current meter reading interval
 
   // Register as dashboard when connected
   useEffect(() => {
@@ -58,6 +59,9 @@ export default function Dashboard() {
       case 'dashboard:initial':
         // Initial data load
         setMeter(lastMessage.meter)
+        if (lastMessage.meter?.reading_interval) {
+          setCurrentInterval(lastMessage.meter.reading_interval)
+        }
         if (lastMessage.currentBlock) {
           setCurrentBlock(lastMessage.currentBlock)
         }
@@ -80,6 +84,9 @@ export default function Dashboard() {
       case 'dashboard:update':
         // Real-time update
         setMeter(lastMessage.meter)
+        if (lastMessage.meter?.reading_interval) {
+          setCurrentInterval(lastMessage.meter.reading_interval)
+        }
         setCurrentBlock(lastMessage.currentBlock)
         setBlockInfo(lastMessage.blockInfo)
 
@@ -97,8 +104,10 @@ export default function Dashboard() {
           }
 
           setReadings((prev) => {
-            // Keep last 30 readings for the chart
-            const updated = [...prev, newReading].slice(-30)
+            // Sort readings by timestamp and keep last 30 for the chart
+            const updated = [...prev, newReading].sort((a, b) =>
+              parseInt(a.timestamp.toString()) - parseInt(b.timestamp.toString())
+            ).slice(-30)
             return updated
           })
         }
@@ -189,6 +198,12 @@ export default function Dashboard() {
           {meter && (
             <Chip variant="tint" color="brand">
               {meter.device_id}
+            </Chip>
+          )}
+
+          {meter && (
+            <Chip variant="tint" color="brand">
+              Reading Interval: {currentInterval}s
             </Chip>
           )}
         </div>
