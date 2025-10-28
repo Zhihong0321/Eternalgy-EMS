@@ -24,6 +24,12 @@ interface Block {
   is_peak_hour: boolean
 }
 
+interface Simulator {
+  deviceId: string
+  simulatorName: string
+  meterId?: number
+}
+
 export default function Dashboard() {
   const { isConnected, send, lastMessage } = useWebSocket(WS_URL)
 
@@ -31,6 +37,9 @@ export default function Dashboard() {
   const [currentBlock, setCurrentBlock] = useState<Block | null>(null)
   const [blockInfo, setBlockInfo] = useState<any>(null)
   const [meter, setMeter] = useState<any>(null)
+  const [connectedSimulators, setConnectedSimulators] = useState<Simulator[]>([])
+  const [allMeters, setAllMeters] = useState<any[]>([])
+  const [selectedMeterId, setSelectedMeterId] = useState<number | null>(null)
 
   // Register as dashboard when connected
   useEffect(() => {
@@ -52,6 +61,17 @@ export default function Dashboard() {
         if (lastMessage.currentBlock) {
           setCurrentBlock(lastMessage.currentBlock)
         }
+        if (lastMessage.simulators) {
+          setConnectedSimulators(lastMessage.simulators)
+        }
+        if (lastMessage.allMeters) {
+          setAllMeters(lastMessage.allMeters)
+        }
+        break
+
+      case 'dashboard:simulators-updated':
+        // Update simulators list
+        setConnectedSimulators(lastMessage.simulators || [])
         break
 
       case 'dashboard:update':
@@ -114,6 +134,34 @@ export default function Dashboard() {
   const isPeakHour = blockInfo?.isPeakHour || false
   const minutesRemaining = getMinutesRemaining()
 
+  // Handle wipe simulator data
+  const handleWipeSimulatorData = async () => {
+    if (!confirm('Are you sure you want to delete ALL simulator data? This cannot be undone!')) {
+      return
+    }
+
+    try {
+      const response = await fetch('http://localhost:3000/api/simulators/data', {
+        method: 'DELETE'
+      })
+      const result = await response.json()
+      alert(`Successfully deleted ${result.deleted} simulator meters and their data`)
+
+      // Refresh the page or clear local state
+      window.location.reload()
+    } catch (error) {
+      console.error('Error wiping simulator data:', error)
+      alert('Failed to wipe simulator data')
+    }
+  }
+
+  // Handle meter selection change
+  const handleMeterChange = async (meterId: number) => {
+    setSelectedMeterId(meterId)
+    // In a real implementation, we'd fetch data for this meter
+    // For now, just update the selection
+  }
+
   return (
     <div className="px-4 py-6">
       <div className="max-w-6xl mx-auto">
@@ -140,6 +188,57 @@ export default function Dashboard() {
               {meter.device_id}
             </Chip>
           )}
+        </div>
+
+        {/* Connected Simulators & Controls */}
+        <div className="bg-white shadow rounded-lg p-6 mb-6">
+          <div className="flex justify-between items-start mb-4 flex-wrap gap-4">
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold mb-3">Connected Simulators</h3>
+              {connectedSimulators.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {connectedSimulators.map((sim) => (
+                    <Chip key={sim.deviceId} variant="filled" color="success">
+                      {sim.simulatorName} ({sim.deviceId})
+                    </Chip>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">No simulators connected</p>
+              )}
+            </div>
+
+            {/* Meter Selection */}
+            <div className="min-w-64">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Select Meter
+              </label>
+              <select
+                value={selectedMeterId || meter?.id || ''}
+                onChange={(e) => handleMeterChange(Number(e.target.value))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {allMeters.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.device_id} {m.is_simulator ? '(Simulator)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Wipe Simulator Data Button */}
+          <div className="pt-4 border-t border-gray-200">
+            <button
+              onClick={handleWipeSimulatorData}
+              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md font-medium transition-colors"
+            >
+              🗑️ Wipe All Simulator Data
+            </button>
+            <p className="text-xs text-gray-500 mt-2">
+              This will delete all simulator meters and their readings from the database
+            </p>
+          </div>
         </div>
 
         {/* Current Block Status */}
