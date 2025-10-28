@@ -9,7 +9,8 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  ReferenceLine
+  ReferenceLine,
+  Line
 } from 'recharts'
 import { resolveWebSocketConfig } from '../config'
 import { useDashboardData } from '../hooks/useDashboardData'
@@ -27,6 +28,8 @@ type DashboardProps = {
 type ChartReading = {
   timestamp: number
   total_power_kw: number
+  aux_power_kw: number
+  trend_kw: number
   time: string
 }
 
@@ -34,9 +37,14 @@ function normalizeReading(reading: EnergyReading): ChartReading {
   const timestamp = typeof reading.timestamp === 'string' ? Number(reading.timestamp) : reading.timestamp
   const totalPowerKw = parseFloat(reading.total_power_kw)
 
+  const total = Number.isFinite(totalPowerKw) ? totalPowerKw : 0
+  const aux = total > 0 ? Math.max(0, total * 0.65) : 0
+
   return {
     timestamp,
-    total_power_kw: Number.isFinite(totalPowerKw) ? totalPowerKw : 0,
+    total_power_kw: total,
+    aux_power_kw: aux,
+    trend_kw: total, // placeholder; will be smoothed below
     time: new Date(timestamp).toLocaleTimeString('en-US', {
       hour: '2-digit',
       minute: '2-digit'
@@ -106,7 +114,19 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
   const dashboardsOnline = snapshot?.dashboardStats?.dashboardsOnline ?? 0
   const hasDashboardsReady = snapshot?.dashboardStats?.dashboardsReady ?? false
 
-  const chartData = useMemo<ChartReading[]>(() => readings.map(normalizeReading), [readings])
+  const chartData = useMemo<ChartReading[]>(() => {
+    const base = readings.map(normalizeReading)
+    // simple moving average for trend
+    const window = 5
+    let sum = 0
+    for (let i = 0; i < base.length; i++) {
+      sum += base[i].total_power_kw
+      if (i >= window) sum -= base[i - window].total_power_kw
+      const count = Math.min(i + 1, window)
+      base[i].trend_kw = count > 0 ? sum / count : base[i].total_power_kw
+    }
+    return base
+  }, [readings])
   const latestReading = chartData.length > 0 ? chartData[chartData.length - 1] : null
 
   const targetKwh = 200
@@ -420,51 +440,50 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
         </section>
 
         {/* Power chart */}
-        <section className="bg-white shadow rounded-lg p-6">
-          <h3 className="text-lg font-semibold mb-4">Stored Power Readings (kW)</h3>
-          {hasReadings ? (
+        <section className="bg-[#111827] text-white rounded-xl p-6 shadow-lg">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">Charging Analysis</h3>
+            <div className="flex gap-2">
+              <button className="px-3 py-1 rounded-full text-sm bg-[#1f2937] hover:bg-[#374151]">Week</button>
+              <button className="px-3 py-1 rounded-full text-sm bg-[#1f2937] hover:bg-[#374151]">Month</button>
+              <button className="px-3 py-1 rounded-full text-sm bg-[#2563eb] text-white">Year</button>
+            </div>
+          </div>
+           {hasReadings ? (
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="time" tick={{ fontSize: 12 }} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 12 }} />
+                <CartesianGrid stroke="#1f2937" strokeDasharray="4 4" />
+                <XAxis dataKey="time" tick={{ fontSize: 12, fill: '#9CA3AF' }} interval="preserveStartEnd" stroke="#374151" />
+                <YAxis tick={{ fontSize: 12, fill: '#9CA3AF' }} stroke="#374151" />
                 <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#fff',
-                    border: '1px solid #ccc',
-                    borderRadius: '4px'
-                  }}
+                  contentStyle={{ backgroundColor: '#111827', border: '1px solid #374151', borderRadius: '8px', color: '#fff' }}
+                  labelStyle={{ color: '#9CA3AF' }}
+                  itemStyle={{ color: '#fff' }}
                 />
                 {currentBlock && (
                   <>
-                    <ReferenceLine
-                      y={parseFloat(currentBlock.avg_power_kw)}
-                      stroke="#6366f1"
-                      strokeDasharray="3 3"
-                      label={{ value: 'Avg', position: 'right', fontSize: 12 }}
-                    />
-                    <ReferenceLine
-                      y={parseFloat(currentBlock.max_power_kw)}
-                      stroke="#ef4444"
-                      strokeDasharray="3 3"
-                      label={{ value: 'Max', position: 'right', fontSize: 12 }}
-                    />
+                    <ReferenceLine y={parseFloat(currentBlock.avg_power_kw)} stroke="#60A5FA" strokeDasharray="6 6" label={{ value: 'Avg', position: 'right', fontSize: 12, fill: '#9CA3AF' }} />
+                    <ReferenceLine y={parseFloat(currentBlock.max_power_kw)} stroke="#F87171" strokeDasharray="6 6" label={{ value: 'Max', position: 'right', fontSize: 12, fill: '#9CA3AF' }} />
                   </>
                 )}
-                <Bar dataKey="total_power_kw" fill="#2563eb" />
+                {/* Multiple bar series to mimic example styling */}
+                <Bar dataKey="total_power_kw" name="Direct login" fill="#60A5FA" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="aux_power_kw" name="Links to sites" fill="#8B5CF6" radius={[6, 6, 0, 0]} />
+                {/* Dotted line overlay to represent trend */}
+                <Line type="monotone" dataKey="trend_kw" stroke="#34D399" strokeDasharray="4 6" dot={false} strokeWidth={2} />
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div className="h-64 flex items-center justify-center bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 text-center">
+            <div className="h-64 flex items-center justify-center bg-[#0b1220] rounded-lg border-2 border-dashed border-[#1f2937] text-center">
               <div>
-                <p className="text-gray-600 font-medium">No stored readings yet.</p>
-                <p className="text-sm text-gray-500 mt-1">
+                <p className="text-gray-300 font-medium">No stored readings yet.</p>
+                <p className="text-sm text-gray-400 mt-1">
                   Historical data will appear instantly after the first simulator upload.
                 </p>
               </div>
             </div>
           )}
-        </section>
+         </section>
 
         {/* Last ten blocks */}
         {lastTenBlocks.length > 0 && (
