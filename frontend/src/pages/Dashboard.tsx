@@ -153,9 +153,22 @@ export default function Dashboard() {
     }
 
     try {
-      const response = await fetch('http://localhost:3000/api/simulators/data', {
-        method: 'DELETE'
+      // Use relative URL in production (same origin), absolute URL in dev
+      const API_URL = window.location.hostname === 'localhost'
+        ? 'http://localhost:3000'
+        : window.location.origin
+
+      const response = await fetch(`${API_URL}/api/simulators/data`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json'
+        }
       })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
       const result = await response.json()
       alert(`Successfully deleted ${result.deleted} simulator meters and their data`)
 
@@ -163,7 +176,7 @@ export default function Dashboard() {
       window.location.reload()
     } catch (error) {
       console.error('Error wiping simulator data:', error)
-      alert('Failed to wipe simulator data')
+      alert(`Failed to wipe simulator data: ${error instanceof Error ? error.message : 'Unknown error'}`)
     }
   }
 

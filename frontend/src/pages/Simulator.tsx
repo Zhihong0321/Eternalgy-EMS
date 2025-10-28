@@ -54,7 +54,11 @@ export default function Simulator() {
 
         if (confirmed) {
           try {
-            const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+            // Use relative URL in production (same origin), absolute URL in dev
+            const API_URL = window.location.hostname === 'localhost'
+              ? 'http://localhost:3000'
+              : window.location.origin
+
             const response = await fetch(`${API_URL}/api/simulators/data`, {
               method: 'DELETE'
             })
