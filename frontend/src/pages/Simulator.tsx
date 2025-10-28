@@ -1,14 +1,20 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useWebSocket } from '../hooks/useWebSocket'
 import Button from '../components/Button'
 import Badge from '../components/Badge'
 import Chip from '../components/Chip'
 import { generateSimulatorName } from '../utils/nameGenerator'
+import { resolveWebSocketUrl } from '../config'
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3000'
+const DEFAULT_WS_URL = 'ws://localhost:3000'
 
 export default function Simulator() {
-  const { isConnected, send, lastMessage } = useWebSocket(WS_URL)
+  const wsUrl = useMemo(() => {
+    const resolved = resolveWebSocketUrl()
+    return resolved || DEFAULT_WS_URL
+  }, [])
+
+  const { isConnected, send, lastMessage } = useWebSocket(wsUrl)
 
   const [simulatorName, setSimulatorName] = useState(() => generateSimulatorName())
   const [isEditingName, setIsEditingName] = useState(false)

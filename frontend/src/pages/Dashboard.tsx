@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useWebSocket } from '../hooks/useWebSocket'
 import Badge from '../components/Badge'
 import Chip from '../components/Chip'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
+import { resolveWebSocketUrl } from '../config'
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3000'
+const DEFAULT_WS_URL = 'ws://localhost:3000'
 
 interface Reading {
   timestamp: number
@@ -30,7 +31,12 @@ interface Simulator {
 }
 
 export default function Dashboard() {
-  const { isConnected, send, lastMessage } = useWebSocket(WS_URL)
+  const wsUrl = useMemo(() => {
+    const resolved = resolveWebSocketUrl()
+    return resolved || DEFAULT_WS_URL
+  }, [])
+
+  const { isConnected, send, lastMessage } = useWebSocket(wsUrl)
 
   const [readings, setReadings] = useState<Reading[]>([])
   const [currentBlock, setCurrentBlock] = useState<Block | null>(null)
