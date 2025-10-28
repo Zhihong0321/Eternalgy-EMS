@@ -6,6 +6,8 @@
   "scripts": {
     "postinstall": "cd backend && npm install",
     "start": "cd backend && npm start",
-    "dev": "cd backend && npm run dev"
+    "dev": "cd backend && npm run dev",
+    "build": "npm --prefix frontend run build && node scripts/sync-frontend.js",
+    "sync:frontend": "node scripts/sync-frontend.js"
   }
 }
