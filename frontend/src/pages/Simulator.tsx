@@ -49,7 +49,9 @@ export default function Simulator() {
 
   const [simulatorName, setSimulatorName] = useState(() => generateSimulatorName())
   const [isEditingName, setIsEditingName] = useState(false)
-  const [deviceId, setDeviceId] = useState('SIMULATOR-001')
+  // const [deviceId, setDeviceId] = useState('SIMULATOR-001')
+  const defaultDeviceName = `SIM-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2,5).toUpperCase()}`
+  const [deviceId, setDeviceId] = useState(defaultDeviceName)
   const [power, setPower] = useState(75)
   const [manualPower, setManualPower] = useState(75)
   const [frequency, setFrequency] = useState(60)
@@ -234,6 +236,7 @@ export default function Simulator() {
       const didRegister = send({
         type: 'simulator:register',
         deviceId,
+        deviceName: deviceId,
         simulatorName,
       })
 
@@ -248,7 +251,7 @@ export default function Simulator() {
     if (!lastMessage) return
 
     if (lastMessage.type === 'simulator:registered') {
-      pushLog(`Simulator registered as ${lastMessage.simulatorName} (${lastMessage.deviceId})`)
+      pushLog(`Simulator registered as ${lastMessage.simulatorName} (${lastMessage.deviceName || lastMessage.deviceId})`)
       setIsRegistered(true)
       setSentCount(0)
       setAttemptedCount(0)
@@ -285,6 +288,7 @@ export default function Simulator() {
           const didRegister = send({
             type: 'simulator:register',
             deviceId,
+            deviceName: deviceId,
             simulatorName
           })
           if (!didRegister) {
@@ -416,6 +420,7 @@ export default function Simulator() {
         const didSend = send({
           type: 'simulator:reading',
           deviceId,
+          deviceName: deviceId,
           simulatorName,
           totalPowerKw: parseFloat(finalPower.toFixed(2)),
           timestamp: Date.now() + timeOffset,
@@ -460,6 +465,7 @@ export default function Simulator() {
     const didSend = send({
       type: 'simulator:reading',
       deviceId,
+      deviceName: deviceId,
       simulatorName,
       totalPowerKw: parseFloat(currentPower.toFixed(2)),
       timestamp: Date.now(),
@@ -588,10 +594,10 @@ export default function Simulator() {
             </div>
           </div>
 
-          {/* Device ID */}
+          {/* Device Name */}
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Device ID
+              Device Name
             </label>
             <input
               type="text"
@@ -599,7 +605,7 @@ export default function Simulator() {
               onChange={(e) => setDeviceId(e.target.value)}
               disabled={isRunning}
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="SIMULATOR-001"
+              placeholder="SIM-XXXXXX"
             />
           </div>
 
@@ -844,7 +850,7 @@ export default function Simulator() {
           <h3 className="text-lg font-semibold mb-3">Current Reading Preview</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
             <div>
-              <p className="text-gray-600">Device ID:</p>
+              <p className="text-gray-600">Device Name:</p>
               <p className="font-mono font-semibold">{deviceId}</p>
             </div>
             <div>

@@ -177,6 +177,7 @@ function buildHandshakePayload(ws, { reason = 'manual', note } = {}) {
     message,
     reason,
     deviceId: registration?.deviceId,
+    deviceName: registration?.deviceId,
     simulatorName: registration?.simulatorName,
     timestamp: Date.now()
   };
@@ -214,6 +215,7 @@ function getConnectedSimulators() {
     if (ws.readyState === WebSocket.OPEN) {
       simulators.push({
         deviceId: simData.deviceId,
+        deviceName: simData.deviceId,
         simulatorName: simData.simulatorName,
         meterId: simData.meter?.id
       });
@@ -252,7 +254,7 @@ wss.on('connection', (ws, req) => {
         case 'simulator:register':
           // Register as simulator
           ws.clientType = 'simulator';
-          const deviceId = data.deviceId || 'EMS-SIMULATOR-001';
+          const deviceId = (data.deviceName && typeof data.deviceName === 'string' ? data.deviceName : data.deviceId) || 'EMS-SIMULATOR-001';
           const simulatorName = data.simulatorName || 'NONAME';
           const trimmedSimulatorName =
             typeof simulatorName === 'string' && simulatorName.trim().length > 0
@@ -274,6 +276,7 @@ wss.on('connection', (ws, req) => {
           ws.send(JSON.stringify({
             type: 'simulator:registered',
             deviceId,
+            deviceName: deviceId,
             simulatorName: trimmedSimulatorName || simulatorName,
             timestamp: Date.now()
           }));
@@ -377,10 +380,11 @@ wss.on('connection', (ws, req) => {
  * Handle meter reading from simulator
  */
 async function handleMeterReading(data, ws) {
-  const { deviceId, totalPowerKw, timestamp, frequency, readingInterval } = data;
+  const originId = (data.deviceName && typeof data.deviceName === 'string' ? data.deviceName : data.deviceId);
+  const { totalPowerKw, timestamp, frequency, readingInterval } = data;
   const ackBase = {
     type: 'simulator:acknowledged',
-    deviceId,
+    deviceId: originId,
     timestamp: Date.now(),
     reading: {
       totalPowerKw,
@@ -389,8 +393,7 @@ async function handleMeterReading(data, ws) {
   };
 
   try {
-    // Get or create meter
-    const meter = await getOrCreateMeter(deviceId, true);
+    const meter = await getOrCreateMeter(originId, true);
 
     // Update meter's reading interval if provided
     if (readingInterval && meter.reading_interval !== readingInterval) {
@@ -408,7 +411,7 @@ async function handleMeterReading(data, ws) {
       readingInterval || 60
     );
 
-    console.log(`📈 Reading received: ${deviceId} - ${totalPowerKw} kW`);
+    console.log(`📈 Reading received: ${originId} - ${totalPowerKw} kW`);
 
     // Calculate block using the reading timestamp to avoid clock skew issues
     const {
@@ -469,8 +472,9 @@ async function handleMeterReading(data, ws) {
 }
 
 function validateSimulatorReading(data) {
-  if (!data.deviceId || typeof data.deviceId !== 'string') {
-    throw new Error('Invalid simulator payload: "deviceId" is required');
+  const id = (data.deviceName && typeof data.deviceName === 'string' ? data.deviceName : data.deviceId);
+  if (!id || typeof id !== 'string') {
+    throw new Error('Invalid simulator payload: "deviceId/deviceName" is required');
   }
 
   if (typeof data.totalPowerKw !== 'number' || Number.isNaN(data.totalPowerKw)) {

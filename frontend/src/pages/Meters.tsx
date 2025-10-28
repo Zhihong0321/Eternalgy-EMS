@@ -228,7 +228,7 @@ export default function Meters({ selectedMeterId: externalSelectedMeterId = null
                       >
                         {formatDisplayName(meter)}
                       </button>
-                      <p className="text-sm text-gray-500">Device ID: {meter.device_id}</p>
+                      <p className="text-sm text-gray-500">Device Name: {meter.client_name?.trim() ? meter.client_name.trim() : meter.device_id}</p>
                     </div>
                     <Badge
                       variant="lg"

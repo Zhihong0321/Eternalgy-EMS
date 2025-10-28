@@ -198,7 +198,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
                   Meter: {meterDisplayName}
                 </Chip>
                 <Chip variant="tint" color="brand">
-                  Device ID: {meter.device_id}
+                  Device Name: {meterDisplayName}
                 </Chip>
               </>
             )}
@@ -227,7 +227,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
                 <div className="flex flex-wrap gap-2">
                   {connectedSimulators.map((simulator) => (
                     <Chip key={`${simulator.deviceId}-${simulator.simulatorName}`} variant="filled" color="success">
-                      {simulator.simulatorName} ({simulator.deviceId})
+                      {simulator.simulatorName}
                     </Chip>
                   ))}
                 </div>
