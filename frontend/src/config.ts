@@ -6,11 +6,14 @@ export function resolveWebSocketUrl(): string {
 
   if (typeof window !== 'undefined') {
     const { protocol, hostname, port } = window.location
-    const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1'
+    const isLoopbackHost = hostname === 'localhost' || hostname === '127.0.0.1'
+    const isWildcardHost = hostname === '0.0.0.0'
+    const isPrivateNetworkHost = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(hostname)
 
-    if (isLocalhost) {
-      // Local development backend defaults to port 3000
-      return `ws://${hostname}:3000`
+    if (isLoopbackHost || isWildcardHost || isPrivateNetworkHost) {
+      // Local and private-network development backend defaults to port 3000
+      const targetHost = isWildcardHost ? 'localhost' : hostname
+      return `ws://${targetHost}:3000`
     }
 
     const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:'
