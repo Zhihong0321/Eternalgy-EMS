@@ -127,6 +127,31 @@ async function getBlocksByTimeRange(meterId, startTime, endTime) {
   return result.rows;
 }
 
+// Delete all data for simulator meters
+async function deleteSimulatorData() {
+  // Delete readings for simulator meters
+  await query(
+    `DELETE FROM energy_readings
+     WHERE meter_id IN (SELECT id FROM meters WHERE is_simulator = true)`
+  );
+
+  // Delete blocks for simulator meters
+  await query(
+    `DELETE FROM thirty_min_blocks
+     WHERE meter_id IN (SELECT id FROM meters WHERE is_simulator = true)`
+  );
+
+  // Delete simulator meters
+  const result = await query(
+    `DELETE FROM meters WHERE is_simulator = true RETURNING *`
+  );
+
+  return {
+    deleted: result.rowCount,
+    meters: result.rows
+  };
+}
+
 module.exports = {
   // Meters
   getOrCreateMeter,
@@ -141,5 +166,8 @@ module.exports = {
   upsertBlock,
   getCurrentBlock,
   getBlocksForToday,
-  getBlocksByTimeRange
+  getBlocksByTimeRange,
+
+  // Admin
+  deleteSimulatorData
 };

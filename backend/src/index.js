@@ -34,9 +34,34 @@ app.use('/api/debug', debugRouter);
 
 // Store connected clients by type
 const clients = {
-  simulators: new Set(),
+  simulators: new Map(), // Map of ws -> {deviceId, simulatorName, meter}
   dashboards: new Set()
 };
+
+// Helper to get list of connected simulators
+function getConnectedSimulators() {
+  const simulators = [];
+  clients.simulators.forEach((simData, ws) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      simulators.push({
+        deviceId: simData.deviceId,
+        simulatorName: simData.simulatorName,
+        meterId: simData.meter?.id
+      });
+    }
+  });
+  return simulators;
+}
+
+// Helper to broadcast to all dashboards
+function broadcastToDashboards(message) {
+  const messageStr = JSON.stringify(message);
+  clients.dashboards.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(messageStr);
+    }
+  });
+}
 
 /**
  * WebSocket Connection Handler
@@ -51,16 +76,33 @@ wss.on('connection', (ws, req) => {
       switch (data.type) {
         case 'simulator:register':
           // Register as simulator
-          clients.simulators.add(ws);
           ws.clientType = 'simulator';
-          ws.deviceId = data.deviceId || 'EMS-SIMULATOR-001';
-          console.log(`📱 Simulator registered: ${ws.deviceId}`);
+          const deviceId = data.deviceId || 'EMS-SIMULATOR-001';
+          const simulatorName = data.simulatorName || 'NONAME';
+
+          // Get or create meter for this simulator
+          const meter = await getOrCreateMeter(deviceId, true);
+
+          clients.simulators.set(ws, {
+            deviceId,
+            simulatorName,
+            meter
+          });
+
+          console.log(`📱 Simulator registered: ${simulatorName} (${deviceId})`);
 
           ws.send(JSON.stringify({
             type: 'simulator:registered',
-            deviceId: ws.deviceId,
+            deviceId,
+            simulatorName,
             timestamp: Date.now()
           }));
+
+          // Notify all dashboards about the new simulator
+          broadcastToDashboards({
+            type: 'dashboard:simulators-updated',
+            simulators: getConnectedSimulators()
+          });
           break;
 
         case 'dashboard:register':
@@ -82,6 +124,8 @@ wss.on('connection', (ws, req) => {
               meter: defaultMeter,
               currentBlock,
               blocksToday,
+              simulators: getConnectedSimulators(),
+              allMeters: meters,
               timestamp: Date.now()
             }));
           }
@@ -106,9 +150,18 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     // Remove from client lists
+    const wasSimulator = clients.simulators.has(ws);
     clients.simulators.delete(ws);
     clients.dashboards.delete(ws);
     console.log(`❌ Client disconnected (${ws.clientType || 'unknown'})`);
+
+    // If a simulator disconnected, notify dashboards
+    if (wasSimulator) {
+      broadcastToDashboards({
+        type: 'dashboard:simulators-updated',
+        simulators: getConnectedSimulators()
+      });
+    }
   });
 
   ws.on('error', (error) => {
@@ -222,6 +275,25 @@ app.get('/api/meters/:deviceId/blocks/today', async (req, res) => {
     const blocks = await getBlocksForToday(meter.id);
     res.json(blocks);
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete all simulator data
+app.delete('/api/simulators/data', async (req, res) => {
+  try {
+    const { deleteSimulatorData } = require('./db/queries');
+    const result = await deleteSimulatorData();
+
+    console.log(`🗑️  Deleted ${result.deleted} simulator meters and their data`);
+
+    res.json({
+      success: true,
+      deleted: result.deleted,
+      message: `Deleted ${result.deleted} simulator meters and all associated data`
+    });
+  } catch (error) {
+    console.error('Error deleting simulator data:', error);
     res.status(500).json({ error: error.message });
   }
 });
