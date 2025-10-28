@@ -23,6 +23,7 @@ const {
   updateMeterName
 } = require('./db/queries');
 const { calculateCurrentBlock, calculateBlockForTimestamp } = require('./services/blockAggregator');
+const { pool } = require('./db/connection');
 
 // Import debug API routes
 const debugRouter = require('./api/debug');
@@ -691,6 +692,18 @@ app.delete('/api/simulators/data', async (req, res) => {
 /**
  * Start Server
  */
+async function ensureDbMigrations() {
+  try {
+    console.log('🔄 Ensuring DB migrations for reading_interval columns...');
+    await pool.query('ALTER TABLE meters ADD COLUMN IF NOT EXISTS reading_interval INTEGER DEFAULT 60;');
+    await pool.query('ALTER TABLE energy_readings ADD COLUMN IF NOT EXISTS reading_interval INTEGER DEFAULT 60;');
+    await pool.query('UPDATE meters SET reading_interval = 60 WHERE reading_interval IS NULL;');
+    await pool.query('UPDATE energy_readings SET reading_interval = 60 WHERE reading_interval IS NULL;');
+    console.log('✅ DB migrations ensured.');
+  } catch (err) {
+    console.error('❌ Failed to ensure DB migrations:', err);
+  }
+}
 server.listen(PORT, () => {
   console.log(`
 ╔══════════════════════════════════════════╗
@@ -701,7 +714,10 @@ server.listen(PORT, () => {
 ║   📊 Dashboard: http://localhost:${PORT}/  ║
 ╚══════════════════════════════════════════╝
   `);
-});
+  });
+}
+
+startServer();
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
