@@ -26,9 +26,11 @@ interface UseDashboardDataResult {
   lastUpdated: Date | null
 }
 
-export function useDashboardData(): UseDashboardDataResult {
+export function useDashboardData(initialMeterId?: number): UseDashboardDataResult {
   const [meters, setMeters] = useState<Meter[]>([])
-  const [selectedMeterId, setSelectedMeterId] = useState<number | null>(null)
+  const [selectedMeterId, setSelectedMeterId] = useState<number | null>(
+    initialMeterId !== undefined ? initialMeterId : null
+  )
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null)
   const [connectedSimulators, setConnectedSimulators] = useState<SimulatorInfo[]>([])
   const [loading, setLoading] = useState<boolean>(false)
@@ -50,19 +52,39 @@ export function useDashboardData(): UseDashboardDataResult {
         return
       }
 
-      const defaultMeter = fetchedMeters.find((meter) => meter.is_simulator) || fetchedMeters[0]
-      setSelectedMeterId((current) => current ?? defaultMeter.id)
+      setSelectedMeterId((current) => {
+        if (current !== null) {
+          return current
+        }
+
+        if (
+          initialMeterId !== undefined &&
+          initialMeterId !== null &&
+          fetchedMeters.some((meter) => meter.id === initialMeterId)
+        ) {
+          return initialMeterId
+        }
+
+        const defaultMeter = fetchedMeters.find((meter) => meter.is_simulator) || fetchedMeters[0]
+        return defaultMeter?.id ?? null
+      })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load meters'
       setError(message)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [initialMeterId])
 
   useEffect(() => {
     initializeMeters()
   }, [initializeMeters])
+
+  useEffect(() => {
+    if (initialMeterId !== undefined && initialMeterId !== null) {
+      setSelectedMeterId((current) => (current === initialMeterId ? current : initialMeterId))
+    }
+  }, [initialMeterId])
 
   const refresh = useCallback(async (options: RefreshOptions = {}) => {
     const targetMeterId = options.meterId ?? selectedMeterId

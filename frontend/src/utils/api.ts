@@ -1,6 +1,8 @@
 import type {
   DashboardSnapshot,
-  Meter
+  Meter,
+  MeterSummary,
+  EnergyReading
 } from '../types/dashboard'
 
 function normalizeBaseUrl(url: string) {
@@ -57,6 +59,10 @@ export async function getMeters(): Promise<Meter[]> {
   return fetchJson('/api/meters')
 }
 
+export async function getMeterSummaries(): Promise<MeterSummary[]> {
+  return fetchJson('/api/meters/summary')
+}
+
 interface SnapshotParams {
   meterId?: number
   deviceId?: string
@@ -84,4 +90,23 @@ export async function wipeSimulatorData() {
   return fetchJson<{ success: boolean; deleted: number; message: string }>('/api/simulators/data', {
     method: 'DELETE'
   })
+}
+
+export async function updateMeterClientName(meterId: number, clientName: string | null) {
+  return fetchJson<Meter>(`/api/meters/${meterId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ clientName })
+  })
+}
+
+export async function getMeterReadings(meterId: number, limit = 50) {
+  const searchParams = new URLSearchParams()
+  if (limit) {
+    searchParams.set('limit', String(limit))
+  }
+
+  const query = searchParams.toString()
+  return fetchJson<{ meter: Meter; readings: EnergyReading[] }>(
+    query ? `/api/meters/${meterId}/readings?${query}` : `/api/meters/${meterId}/readings`
+  )
 }

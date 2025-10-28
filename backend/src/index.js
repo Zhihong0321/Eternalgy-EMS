@@ -18,7 +18,9 @@ const {
   getMeterById,
   getMeterByDeviceId,
   getRecentReadings,
-  getLastNBlocks
+  getLastNBlocks,
+  getMetersWithStats,
+  updateMeterName
 } = require('./db/queries');
 const { calculateCurrentBlock, calculateBlockForTimestamp } = require('./services/blockAggregator');
 
@@ -251,9 +253,13 @@ wss.on('connection', (ws, req) => {
           ws.clientType = 'simulator';
           const deviceId = data.deviceId || 'EMS-SIMULATOR-001';
           const simulatorName = data.simulatorName || 'NONAME';
+          const trimmedSimulatorName =
+            typeof simulatorName === 'string' && simulatorName.trim().length > 0
+              ? simulatorName.trim()
+              : null;
 
           // Get or create meter for this simulator
-          const meter = await getOrCreateMeter(deviceId, true);
+          const meter = await getOrCreateMeter(deviceId, true, trimmedSimulatorName);
 
           clients.simulators.set(ws, {
             deviceId,
@@ -267,7 +273,7 @@ wss.on('connection', (ws, req) => {
           ws.send(JSON.stringify({
             type: 'simulator:registered',
             deviceId,
-            simulatorName,
+            simulatorName: trimmedSimulatorName || simulatorName,
             timestamp: Date.now()
           }));
 
@@ -510,6 +516,64 @@ app.get('/api/meters', async (req, res) => {
     const meters = await require('./db/queries').getAllMeters();
     res.json(meters);
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get meters with stored data statistics
+app.get('/api/meters/summary', async (req, res) => {
+  try {
+    const meters = await getMetersWithStats();
+    res.json(meters);
+  } catch (error) {
+    console.error('Failed to fetch meter summaries:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update meter display name
+app.patch('/api/meters/:meterId', async (req, res) => {
+  try {
+    const meterId = Number(req.params.meterId);
+    if (Number.isNaN(meterId)) {
+      return res.status(400).json({ error: 'Invalid meter ID' });
+    }
+
+    const clientNameRaw = typeof req.body.clientName === 'string' ? req.body.clientName : null;
+    const clientName = clientNameRaw && clientNameRaw.trim().length > 0 ? clientNameRaw.trim() : null;
+
+    const updated = await updateMeterName(meterId, clientName);
+    if (!updated) {
+      return res.status(404).json({ error: 'Meter not found' });
+    }
+
+    res.json(updated);
+  } catch (error) {
+    console.error('Failed to update meter name:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Recent readings for a meter
+app.get('/api/meters/:meterId/readings', async (req, res) => {
+  try {
+    const meterId = Number(req.params.meterId);
+    if (Number.isNaN(meterId)) {
+      return res.status(400).json({ error: 'Invalid meter ID' });
+    }
+
+    const limit = req.query.limit ? Number(req.query.limit) : 50;
+    const readingLimit = Number.isFinite(limit) ? Math.max(1, Math.min(500, Math.trunc(limit))) : 50;
+
+    const meter = await getMeterById(meterId);
+    if (!meter) {
+      return res.status(404).json({ error: 'Meter not found' });
+    }
+
+    const readings = await getRecentReadings(meterId, readingLimit);
+    res.json({ meter, readings });
+  } catch (error) {
+    console.error('Failed to fetch meter readings:', error);
     res.status(500).json({ error: error.message });
   }
 });

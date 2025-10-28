@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Badge from '../components/Badge'
 import Chip from '../components/Chip'
 import {
@@ -18,6 +18,11 @@ import type { BlockRecord, EnergyReading } from '../types/dashboard'
 import { wipeSimulatorData } from '../utils/api'
 
 const DEFAULT_WS_URL = 'ws://localhost:3000'
+
+type DashboardProps = {
+  selectedMeterId?: number | null
+  onSelectMeter?: (meterId: number) => void
+}
 
 type ChartReading = {
   timestamp: number
@@ -63,7 +68,7 @@ function deriveTargetProgress(block: BlockRecord | null, targetKwh: number) {
   return { currentKwh, percentage }
 }
 
-export default function Dashboard() {
+export default function Dashboard({ selectedMeterId: externalSelectedMeterId = null, onSelectMeter }: DashboardProps) {
   const { primaryUrl, fallbackUrls } = useMemo(() => {
     const config = resolveWebSocketConfig()
     const baseUrl = config.primaryUrl || DEFAULT_WS_URL
@@ -73,7 +78,7 @@ export default function Dashboard() {
 
   const {
     meters,
-    selectedMeterId,
+    selectedMeterId: internalSelectedMeterId,
     selectMeter,
     snapshot,
     readings,
@@ -83,7 +88,7 @@ export default function Dashboard() {
     error,
     refresh,
     lastUpdated
-  } = useDashboardData()
+  } = useDashboardData(externalSelectedMeterId ?? undefined)
 
   const { isConnected, activeEndpoint, connectionError, logs, lastEvent } = useDashboardRealtime(primaryUrl, {
     fallbackUrls,
@@ -94,6 +99,7 @@ export default function Dashboard() {
   const [isWiping, setIsWiping] = useState(false)
 
   const meter = snapshot?.meter ?? null
+  const meterDisplayName = meter?.client_name?.trim() ? meter.client_name : meter?.device_id ?? 'Unknown meter'
   const blockInfo = snapshot?.blockInfo ?? null
   const currentBlock = snapshot?.currentBlock ?? null
   const lastTenBlocks = snapshot?.lastTenBlocks ?? []
@@ -117,8 +123,19 @@ export default function Dashboard() {
   const isPeakHour = blockInfo?.isPeakHour || false
   const currentInterval = meter?.reading_interval ?? null
 
+  useEffect(() => {
+    if (
+      externalSelectedMeterId !== null &&
+      externalSelectedMeterId !== undefined &&
+      externalSelectedMeterId !== internalSelectedMeterId
+    ) {
+      selectMeter(externalSelectedMeterId)
+    }
+  }, [externalSelectedMeterId, internalSelectedMeterId, selectMeter])
+
   const handleMeterChange = (meterId: number) => {
     selectMeter(meterId)
+    onSelectMeter?.(meterId)
   }
 
   const handleWipeSimulatorData = async () => {
@@ -176,9 +193,14 @@ export default function Dashboard() {
             </Chip>
 
             {meter && (
-              <Chip variant="tint" color="brand">
-                {meter.device_id}
-              </Chip>
+              <>
+                <Chip variant="tint" color="brand">
+                  Meter: {meterDisplayName}
+                </Chip>
+                <Chip variant="tint" color="brand">
+                  Device ID: {meter.device_id}
+                </Chip>
+              </>
             )}
 
             {currentInterval && (
@@ -257,16 +279,21 @@ export default function Dashboard() {
             <div className="min-w-64">
               <label className="block text-sm font-medium text-gray-700 mb-2">Select Meter</label>
               <select
-                value={selectedMeterId || ''}
+                value={internalSelectedMeterId || ''}
                 onChange={(event) => handleMeterChange(Number(event.target.value))}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 disabled={meters.length === 0}
               >
-                {meters.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.device_id} {m.is_simulator ? '(Simulator)' : ''}
-                  </option>
-                ))}
+                {meters.map((m) => {
+                  const displayName = m.client_name?.trim() ? m.client_name : m.device_id
+                  const badge = m.is_simulator ? ' (Simulator)' : ''
+                  return (
+                    <option key={m.id} value={m.id}>
+                      {displayName}
+                      {badge}
+                    </option>
+                  )
+                })}
               </select>
             </div>
 

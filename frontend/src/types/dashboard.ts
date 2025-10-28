@@ -1,9 +1,19 @@
 export interface Meter {
   id: number
   device_id: string
+  client_name?: string | null
   is_simulator: boolean
   reading_interval?: number | null
+  created_at?: string
+  updated_at?: string
   [key: string]: unknown
+}
+
+export interface MeterSummary extends Meter {
+  reading_count: number
+  first_reading_timestamp?: number | string | null
+  last_reading_timestamp?: number | string | null
+  last_total_power_kw?: string | null
 }
 
 export interface SimulatorInfo {
