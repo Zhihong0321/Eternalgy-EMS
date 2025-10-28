@@ -9,6 +9,7 @@ import { resolveWebSocketUrl } from '../config'
 const DEFAULT_WS_URL = 'ws://localhost:3000'
 
 type HandshakeState = 'idle' | 'pending' | 'success' | 'warning' | 'error'
+type AckStatus = 'accepted' | 'error'
 
 const HANDSHAKE_COLORS: Record<Exclude<HandshakeState, 'idle'>, 'brand' | 'success' | 'warning' | 'danger'> = {
   pending: 'brand',
@@ -22,6 +23,16 @@ const HANDSHAKE_MESSAGES: Record<Exclude<HandshakeState, 'idle'>, string> = {
   success: 'Dashboard confirmed and ready to receive data',
   warning: 'No dashboard connected yet',
   error: 'Handshake failed. Check dashboard status.',
+}
+
+const HANDSHAKE_REASON_LABELS: Record<string, string> = {
+  auto: 'automatic check',
+  manual: 'manual check',
+  register: 'registration',
+  'dashboard-joined': 'dashboard joined',
+  'dashboard-left': 'dashboard left',
+  'simulator-registered': 'registration broadcast',
+  initial: 'not yet run'
 }
 
 export default function Simulator() {
@@ -48,6 +59,15 @@ export default function Simulator() {
   const [handshakeStatus, setHandshakeStatus] = useState<HandshakeState>('idle')
   const [handshakeDetails, setHandshakeDetails] = useState('')
   const [eventLog, setEventLog] = useState<string[]>([])
+  const [isRegistered, setIsRegistered] = useState(false)
+  const [attemptedCount, setAttemptedCount] = useState(0)
+  const [dashboardsOnline, setDashboardsOnline] = useState(0)
+  const [lastHandshakeAt, setLastHandshakeAt] = useState<number | null>(null)
+  const [lastHandshakeReason, setLastHandshakeReason] = useState<string>('initial')
+  const [lastAckAt, setLastAckAt] = useState<number | null>(null)
+  const [lastAckStatus, setLastAckStatus] = useState<AckStatus | null>(null)
+  const [lastAckMessage, setLastAckMessage] = useState<string | null>(null)
+  const [lastAckSequence, setLastAckSequence] = useState(0)
 
   const pushLog = useCallback((entry: string) => {
     setEventLog((prev) => {
@@ -57,7 +77,71 @@ export default function Simulator() {
     })
   }, [])
 
+  const formatHandshakeReason = useCallback((reason?: string | null) => {
+    if (!reason || reason === 'initial') {
+      return HANDSHAKE_REASON_LABELS.initial
+    }
+
+    return HANDSHAKE_REASON_LABELS[reason] || reason.replace(/-/g, ' ')
+  }, [])
+
+  const formatTimestamp = useCallback((value: number | null) => {
+    if (!value) {
+      return '—'
+    }
+    return new Date(value).toLocaleTimeString()
+  }, [])
+
+  const pendingReadings = Math.max(attemptedCount - sentCount, 0)
+
+  const handshakeChipColor: 'brand' | 'success' | 'warning' | 'danger' =
+    handshakeStatus === 'idle'
+      ? 'brand'
+      : HANDSHAKE_COLORS[handshakeStatus as Exclude<HandshakeState, 'idle'>]
+
+  const handshakeSummary = handshakeStatus === 'idle'
+    ? 'Handshake not requested yet'
+    : handshakeDetails || HANDSHAKE_MESSAGES[handshakeStatus as Exclude<HandshakeState, 'idle'>]
+
+  const handshakeTimestampLabel = handshakeStatus === 'pending'
+    ? 'Awaiting handshake response'
+    : lastHandshakeAt
+      ? `${formatTimestamp(lastHandshakeAt)} • ${formatHandshakeReason(lastHandshakeReason)}`
+      : 'No handshake recorded yet'
+
+  const dashboardsChipColor: 'brand' | 'success' | 'warning' | 'danger' =
+    dashboardsOnline > 0 ? 'success' : 'warning'
+
+  const attemptChipColor: 'brand' | 'success' | 'warning' | 'danger' =
+    attemptedCount === 0 ? 'brand' : pendingReadings > 0 ? 'warning' : 'success'
+
+  const ackChipColor: 'brand' | 'success' | 'warning' | 'danger' =
+    lastAckStatus === 'error'
+      ? 'danger'
+      : lastAckStatus === 'accepted'
+        ? 'success'
+        : pendingReadings > 0
+          ? 'warning'
+          : 'brand'
+
+  const ackSummary = lastAckStatus
+    ? lastAckStatus === 'accepted'
+      ? `Last ack ${formatTimestamp(lastAckAt)}${lastAckSequence ? ` • reading #${lastAckSequence}` : ''}`
+      : `Ack failed${lastAckMessage ? ` • ${lastAckMessage}` : ''}`
+    : 'Awaiting first acknowledgement'
+
+  const ackPreview = lastAckStatus
+    ? lastAckStatus === 'accepted'
+      ? `${formatTimestamp(lastAckAt)}${lastAckSequence ? ` (#${lastAckSequence})` : ''}`
+      : `Failed${lastAckMessage ? ` - ${lastAckMessage}` : ''}`
+    : '—'
+
+  const handshakePreview = lastHandshakeAt
+    ? `${formatTimestamp(lastHandshakeAt)} (${formatHandshakeReason(lastHandshakeReason)})`
+    : '—'
+
   const previousConnectionRef = useRef(isConnected)
+  const previousRunningRef = useRef(isRunning)
 
   useEffect(() => {
     if (isConnected && !previousConnectionRef.current) {
@@ -66,6 +150,16 @@ export default function Simulator() {
       pushLog('Connection lost. Waiting to reconnect...')
       setHandshakeStatus('idle')
       setHandshakeDetails('')
+      setIsRegistered(false)
+      setDashboardsOnline(0)
+      setLastHandshakeAt(null)
+      setLastHandshakeReason('initial')
+      setAttemptedCount(0)
+      setSentCount(0)
+      setLastAckAt(null)
+      setLastAckStatus(null)
+      setLastAckMessage(null)
+      setLastAckSequence(0)
     }
 
     previousConnectionRef.current = isConnected
@@ -77,17 +171,36 @@ export default function Simulator() {
     }
   }, [connectionError, pushLog])
 
-  const requestHandshake = useCallback(() => {
+  useEffect(() => {
+    if (previousRunningRef.current === isRunning) {
+      previousRunningRef.current = isRunning
+      return
+    }
+
+    previousRunningRef.current = isRunning
+
+    if (isRunning) {
+      const speedLabel = fastForwardSpeed > 1 ? ` • ${fastForwardSpeed}x speed` : ''
+      pushLog(`Auto-send started (interval ${interval}s • ${simulationMode} mode${speedLabel})`)
+    } else {
+      pushLog('Auto-send paused')
+    }
+  }, [isRunning, interval, simulationMode, fastForwardSpeed, pushLog])
+
+  const requestHandshake = useCallback((source: 'auto' | 'manual' = 'manual') => {
     const didSend = send({
       type: 'simulator:handshake',
       deviceId,
       simulatorName,
+      source
     })
 
     if (didSend) {
       setHandshakeStatus('pending')
       setHandshakeDetails('Waiting for dashboard confirmation...')
-      pushLog('Sent handshake request to EMS backend')
+      setLastHandshakeReason(source)
+      setLastHandshakeAt(Date.now())
+      pushLog(`${source === 'manual' ? 'Manual' : 'Automatic'} handshake requested`)
     } else {
       setHandshakeStatus('error')
       setHandshakeDetails('Unable to send handshake. Check connection logs.')
@@ -116,7 +229,17 @@ export default function Simulator() {
 
     if (lastMessage.type === 'simulator:registered') {
       pushLog(`Simulator registered as ${lastMessage.simulatorName} (${lastMessage.deviceId})`)
-      requestHandshake()
+      setIsRegistered(true)
+      setSentCount(0)
+      setAttemptedCount(0)
+      setDashboardsOnline(0)
+      setLastAckAt(null)
+      setLastAckStatus(null)
+      setLastAckMessage(null)
+      setLastAckSequence(0)
+      setLastHandshakeAt(typeof lastMessage.timestamp === 'number' ? lastMessage.timestamp : Date.now())
+      setLastHandshakeReason('register')
+      requestHandshake('auto')
       return
     }
 
@@ -135,17 +258,65 @@ export default function Simulator() {
         : HANDSHAKE_MESSAGES[status]
 
       setHandshakeDetails(message)
-      pushLog(message)
+      if (status === 'error') {
+        setIsRegistered(false)
+        if (isConnected) {
+          pushLog('Server reports simulator is not registered. Attempting to re-register...')
+          const didRegister = send({
+            type: 'simulator:register',
+            deviceId,
+            simulatorName
+          })
+          if (!didRegister) {
+            pushLog('Re-registration attempt failed: WebSocket not ready.')
+          }
+        }
+      } else {
+        setIsRegistered(true)
+      }
+      if (typeof lastMessage.dashboardsOnline === 'number') {
+        setDashboardsOnline(lastMessage.dashboardsOnline)
+      }
+      setLastHandshakeAt(typeof lastMessage.timestamp === 'number' ? lastMessage.timestamp : Date.now())
+      if (typeof lastMessage.reason === 'string') {
+        setLastHandshakeReason(lastMessage.reason)
+      }
+      const reasonText = formatHandshakeReason(lastMessage.reason)
+      pushLog(`Handshake (${reasonText}): ${message}`)
 
       return
     }
 
     if (lastMessage.type === 'simulator:acknowledged') {
-      setSentCount((prev) => prev + 1)
-      if (lastMessage.reading?.timestamp) {
-        const time = new Date(lastMessage.reading.timestamp).toLocaleTimeString()
-        pushLog(`Reading acknowledged at ${time}`)
+      const ackStatus: AckStatus = lastMessage.status === 'error' ? 'error' : 'accepted'
+      if (typeof lastMessage.dashboardsOnline === 'number') {
+        setDashboardsOnline(lastMessage.dashboardsOnline)
       }
+
+      const ackTimestamp = typeof lastMessage.timestamp === 'number' ? lastMessage.timestamp : Date.now()
+      setLastAckAt(ackTimestamp)
+      setLastAckStatus(ackStatus)
+      setLastAckMessage(typeof lastMessage.message === 'string' ? lastMessage.message : null)
+
+      if (ackStatus === 'accepted') {
+        setSentCount((prev) => prev + 1)
+        const sequence = typeof lastMessage.sequence === 'number'
+          ? lastMessage.sequence
+          : lastAckSequence + 1
+        setLastAckSequence(sequence)
+
+        const powerLabel = lastMessage.reading?.totalPowerKw !== undefined
+          ? `${lastMessage.reading.totalPowerKw} kW`
+          : 'power unknown'
+        pushLog(`Backend acknowledged reading #${sequence} (${powerLabel})`)
+      } else {
+        if (typeof lastMessage.sequence === 'number') {
+          setLastAckSequence(lastMessage.sequence)
+        }
+        const errorDetail = typeof lastMessage.message === 'string' ? lastMessage.message : 'Unknown error'
+        pushLog(`Backend rejected reading${lastMessage.sequence ? ` #${lastMessage.sequence}` : ''}: ${errorDetail}`)
+      }
+
       return
     }
 
@@ -157,7 +328,7 @@ export default function Simulator() {
       setHandshakeDetails(message)
       pushLog(`Server error: ${message}`)
     }
-  }, [lastMessage, pushLog, requestHandshake])
+  }, [lastMessage, pushLog, requestHandshake, formatHandshakeReason, lastAckSequence, send, deviceId, simulatorName, isConnected])
 
   // Handle interval update with data wipe
   const handleUpdateInterval = async () => {
@@ -219,6 +390,7 @@ export default function Simulator() {
       const readingsToSend = fastForwardSpeed > 1 ? Math.ceil(fastForwardSpeed) : 1
 
       let failedToSend = false
+      let successfulDispatches = 0
       for (let i = 0; i < readingsToSend; i++) {
         const timeOffset = i * (interval * 1000)
         const didSend = send({
@@ -234,6 +406,22 @@ export default function Simulator() {
         if (!didSend) {
           failedToSend = true
           break
+        } else {
+          successfulDispatches += 1
+        }
+      }
+
+      if (successfulDispatches > 0) {
+        let queuedRange: string | null = null
+        setAttemptedCount((prev) => {
+          const next = prev + successfulDispatches
+          const start = prev + 1
+          const end = next
+          queuedRange = start === end ? `#${end}` : `#${start}-${end}`
+          return next
+        })
+        if (queuedRange) {
+          pushLog(`Dispatched ${successfulDispatches} reading${successfulDispatches > 1 ? 's' : ''} (${queuedRange}) awaiting acknowledgement`)
         }
       }
 
@@ -252,6 +440,7 @@ export default function Simulator() {
     const didSend = send({
       type: 'simulator:reading',
       deviceId,
+      simulatorName,
       totalPowerKw: parseFloat(currentPower.toFixed(2)),
       timestamp: Date.now(),
       frequency: parseFloat(frequency.toFixed(2)),
@@ -259,7 +448,15 @@ export default function Simulator() {
     })
 
     if (didSend) {
-      pushLog('Manual reading sent to EMS backend')
+      let queuedSequence: string | null = null
+      setAttemptedCount((prev) => {
+        const next = prev + 1
+        queuedSequence = `#${next}`
+        return next
+      })
+      if (queuedSequence) {
+        pushLog(`Manual reading dispatched (${queuedSequence}) awaiting acknowledgement`)
+      }
     } else {
       pushLog('Manual reading could not be sent. Check WebSocket connection.')
     }
@@ -286,27 +483,38 @@ export default function Simulator() {
             text={isConnected ? 'Connected' : 'Disconnected'}
           />
 
-          {handshakeStatus !== 'idle' && (
-            <Chip
-              variant="tint"
-              color={HANDSHAKE_COLORS[handshakeStatus as Exclude<HandshakeState, 'idle'>]}
-            >
-              {handshakeDetails || HANDSHAKE_MESSAGES[handshakeStatus as Exclude<HandshakeState, 'idle'>]}
-            </Chip>
-          )}
+          <Chip variant="tint" color={handshakeChipColor}>
+            {`Handshake: ${handshakeSummary}`}
+          </Chip>
+
+          <Chip variant="tint" color={dashboardsChipColor}>
+            {dashboardsOnline === 1 ? '1 dashboard online' : `${dashboardsOnline} dashboards online`}
+          </Chip>
+
+          <Chip variant="tint" color="brand">
+            {`Last handshake: ${handshakeTimestampLabel}`}
+          </Chip>
+
+          <Chip variant="tint" color={attemptChipColor}>
+            {`Dispatched ${attemptedCount} • Acked ${sentCount}${pendingReadings > 0 ? ` • ${pendingReadings} pending` : ''}`}
+          </Chip>
+
+          <Chip variant="tint" color={ackChipColor}>
+            {ackSummary}
+          </Chip>
 
           <Button
             variant="border"
             color="primary"
-            onClick={requestHandshake}
+            onClick={() => requestHandshake('manual')}
             disabled={!isConnected || handshakeStatus === 'pending'}
           >
-            {handshakeStatus === 'pending' ? 'Checking...' : 'Check connection'}
+            {handshakeStatus === 'pending' ? 'Checking...' : 'Run handshake'}
           </Button>
 
           {isRunning && (
             <Chip variant="filled" color="success">
-              Running ({sentCount} readings sent)
+              {`Running (acked ${sentCount}/${attemptedCount})`}
             </Chip>
           )}
         </div>
@@ -592,7 +800,15 @@ export default function Simulator() {
             <Button
               variant="plain"
               color="warning"
-              onClick={() => setSentCount(0)}
+              onClick={() => {
+                setSentCount(0)
+                setAttemptedCount(0)
+                setLastAckSequence(0)
+                setLastAckAt(null)
+                setLastAckStatus(null)
+                setLastAckMessage(null)
+                pushLog('Counters reset manually')
+              }}
             >
               Reset Counter
             </Button>
@@ -602,7 +818,7 @@ export default function Simulator() {
         {/* Current Reading Preview */}
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-6">
           <h3 className="text-lg font-semibold mb-3">Current Reading Preview</h3>
-          <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
             <div>
               <p className="text-gray-600">Device ID:</p>
               <p className="font-mono font-semibold">{deviceId}</p>
@@ -618,8 +834,28 @@ export default function Simulator() {
               <p className="font-semibold">{frequency} Hz</p>
             </div>
             <div>
-              <p className="text-gray-600">Readings Sent:</p>
+              <p className="text-gray-600">Dispatch Attempts:</p>
+              <p className="font-semibold">{attemptedCount}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Acknowledged:</p>
               <p className="font-semibold">{sentCount}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Pending Ack:</p>
+              <p className="font-semibold">{pendingReadings}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Last Ack:</p>
+              <p className="font-semibold">{ackPreview}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Last Handshake:</p>
+              <p className="font-semibold">{handshakePreview}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Dashboards Online:</p>
+              <p className="font-semibold">{dashboardsOnline}</p>
             </div>
           </div>
         </div>
@@ -638,6 +874,17 @@ export default function Simulator() {
           </div>
           {connectionError && (
             <p className="text-sm text-red-600 mt-3">{connectionError}</p>
+          )}
+          {!isRegistered && isConnected && (
+            <p className="text-sm text-blue-600 mt-3">Awaiting simulator registration acknowledgement...</p>
+          )}
+          {pendingReadings > 0 && (
+            <p className="text-sm text-amber-600 mt-3">
+              {pendingReadings} reading{pendingReadings === 1 ? '' : 's'} awaiting acknowledgement.
+            </p>
+          )}
+          {lastAckStatus === 'error' && lastAckMessage && (
+            <p className="text-sm text-red-600 mt-1">Last acknowledgement error: {lastAckMessage}</p>
           )}
         </div>
 

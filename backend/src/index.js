@@ -34,9 +34,76 @@ app.use('/api/debug', debugRouter);
 
 // Store connected clients by type
 const clients = {
-  simulators: new Map(), // Map of ws -> {deviceId, simulatorName, meter}
+  simulators: new Map(), // Map of ws -> {deviceId, simulatorName, meter, sequence}
   dashboards: new Set()
 };
+
+function getDashboardStats() {
+  const dashboardsOnline = Array.from(clients.dashboards).filter(client => client.readyState === WebSocket.OPEN).length;
+  return {
+    dashboardsOnline,
+    dashboardsReady: dashboardsOnline > 0
+  };
+}
+
+function buildHandshakePayload(ws, { reason = 'manual', note } = {}) {
+  const registration = clients.simulators.get(ws);
+  const { dashboardsOnline, dashboardsReady } = getDashboardStats();
+
+  let status = 'error';
+  let message = 'Simulator is not registered yet. Please reconnect or refresh the page.';
+
+  if (registration) {
+    if (dashboardsReady) {
+      status = 'ok';
+      message = `Dashboard ready. ${dashboardsOnline} dashboard${dashboardsOnline === 1 ? '' : 's'} connected.`;
+    } else {
+      status = 'warning';
+      message = 'No dashboards are connected. Data will queue once a dashboard joins.';
+    }
+  }
+
+  if (note) {
+    message = note;
+  }
+
+  return {
+    type: 'simulator:handshake-ack',
+    status,
+    dashboardsOnline,
+    dashboardsReady,
+    message,
+    reason,
+    deviceId: registration?.deviceId,
+    simulatorName: registration?.simulatorName,
+    timestamp: Date.now()
+  };
+}
+
+function sendHandshake(ws, options = {}) {
+  if (ws.readyState !== WebSocket.OPEN) {
+    return null;
+  }
+
+  const payload = buildHandshakePayload(ws, options);
+
+  try {
+    ws.send(JSON.stringify(payload));
+  } catch (error) {
+    console.error('Failed to send handshake payload:', error);
+    return null;
+  }
+
+  return payload;
+}
+
+function broadcastHandshakeToSimulators(reason) {
+  clients.simulators.forEach((_, simulatorWs) => {
+    if (simulatorWs.readyState === WebSocket.OPEN) {
+      sendHandshake(simulatorWs, { reason });
+    }
+  });
+}
 
 // Helper to get list of connected simulators
 function getConnectedSimulators() {
@@ -86,7 +153,8 @@ wss.on('connection', (ws, req) => {
           clients.simulators.set(ws, {
             deviceId,
             simulatorName,
-            meter
+            meter,
+            sequence: 0
           });
 
           console.log(`📱 Simulator registered: ${simulatorName} (${deviceId})`);
@@ -98,40 +166,22 @@ wss.on('connection', (ws, req) => {
             timestamp: Date.now()
           }));
 
+          sendHandshake(ws, { reason: 'register' });
+
           // Notify all dashboards about the new simulator
           broadcastToDashboards({
             type: 'dashboard:simulators-updated',
             simulators: getConnectedSimulators()
           });
+          if (clients.dashboards.size > 0) {
+            broadcastHandshakeToSimulators('simulator-registered');
+          }
           break;
 
         case 'simulator:handshake': {
+          const payload = sendHandshake(ws, { reason: data.source === 'auto' ? 'auto' : 'manual' });
           const registration = clients.simulators.get(ws);
-          const dashboardsOnline = Array.from(clients.dashboards).filter(client => client.readyState === WebSocket.OPEN).length;
-          const dashboardsReady = dashboardsOnline > 0;
-
-          const status = registration
-            ? dashboardsReady
-              ? 'ok'
-              : 'warning'
-            : 'error';
-
-          const message = !registration
-            ? 'Simulator is not registered yet. Please reconnect or refresh the page.'
-            : dashboardsReady
-              ? `Dashboard ready. ${dashboardsOnline} dashboard${dashboardsOnline === 1 ? '' : 's'} connected.`
-              : 'No dashboards are connected. Data will queue once a dashboard joins.';
-
-          console.log(`🤝 Handshake request from ${registration?.simulatorName || 'unknown simulator'} -> dashboards online: ${dashboardsOnline}`);
-
-          ws.send(JSON.stringify({
-            type: 'simulator:handshake-ack',
-            status,
-            dashboardsOnline,
-            dashboardsReady,
-            message,
-            timestamp: Date.now()
-          }));
+          console.log(`🤝 Handshake request from ${registration?.simulatorName || 'unknown simulator'} -> dashboards online: ${payload?.dashboardsOnline ?? 0}`);
           break;
         }
 
@@ -162,6 +212,8 @@ wss.on('connection', (ws, req) => {
               timestamp: Date.now()
             }));
           }
+
+          broadcastHandshakeToSimulators('dashboard-joined');
           break;
 
         case 'simulator:reading':
@@ -175,16 +227,19 @@ wss.on('connection', (ws, req) => {
       }
     } catch (error) {
       console.error('WebSocket message error:', error);
-      ws.send(JSON.stringify({
-        type: 'error',
-        message: error.message
-      }));
+      if (!error.silent && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'error',
+          message: error.message
+        }));
+      }
     }
   });
 
   ws.on('close', () => {
     // Remove from client lists
     const wasSimulator = clients.simulators.has(ws);
+    const wasDashboard = clients.dashboards.has(ws);
     clients.simulators.delete(ws);
     clients.dashboards.delete(ws);
     console.log(`❌ Client disconnected (${ws.clientType || 'unknown'})`);
@@ -195,6 +250,10 @@ wss.on('connection', (ws, req) => {
         type: 'dashboard:simulators-updated',
         simulators: getConnectedSimulators()
       });
+    }
+
+    if (wasDashboard) {
+      broadcastHandshakeToSimulators('dashboard-left');
     }
   });
 
@@ -208,64 +267,91 @@ wss.on('connection', (ws, req) => {
  */
 async function handleMeterReading(data, ws) {
   const { deviceId, totalPowerKw, timestamp, frequency, readingInterval } = data;
-
-  // Get or create meter
-  const meter = await getOrCreateMeter(deviceId, true);
-
-  // Update meter's reading interval if provided
-  if (readingInterval && meter.reading_interval !== readingInterval) {
-    const { updateMeterReadingInterval } = require('./db/queries');
-    await updateMeterReadingInterval(meter.id, readingInterval);
-    console.log(`📝 Updated meter ${deviceId} interval to ${readingInterval}s`);
-  }
-
-  // Insert reading with interval
-  const reading = await insertReading(
-    meter.id,
-    timestamp,
-    totalPowerKw,
-    frequency,
-    readingInterval || 60
-  );
-
-  console.log(`📈 Reading received: ${deviceId} - ${totalPowerKw} kW`);
-
-  // Calculate current block
-  const currentBlock = await calculateCurrentBlock(meter.id);
-
-  // Get block info
-  const blockStart = getCurrentBlockStart(timestamp);
-  const blockEnd = getBlockEnd(blockStart);
-  const isPeak = isPeakHour(timestamp);
-
-  // Broadcast to all dashboards
-  const updateMessage = JSON.stringify({
-    type: 'dashboard:update',
-    meter,
-    reading,
-    currentBlock,
-    blockInfo: {
-      start: blockStart,
-      end: blockEnd,
-      isPeakHour: isPeak
-    },
-    timestamp: Date.now()
-  });
-
-  clients.dashboards.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(updateMessage);
-    }
-  });
-
-  // Confirm to simulator
-  ws.send(JSON.stringify({
+  const ackBase = {
     type: 'simulator:acknowledged',
+    deviceId,
+    timestamp: Date.now(),
     reading: {
       totalPowerKw,
       timestamp
     }
-  }));
+  };
+
+  try {
+    // Get or create meter
+    const meter = await getOrCreateMeter(deviceId, true);
+
+    // Update meter's reading interval if provided
+    if (readingInterval && meter.reading_interval !== readingInterval) {
+      const { updateMeterReadingInterval } = require('./db/queries');
+      await updateMeterReadingInterval(meter.id, readingInterval);
+      console.log(`📝 Updated meter ${deviceId} interval to ${readingInterval}s`);
+    }
+
+    // Insert reading with interval
+    const reading = await insertReading(
+      meter.id,
+      timestamp,
+      totalPowerKw,
+      frequency,
+      readingInterval || 60
+    );
+
+    console.log(`📈 Reading received: ${deviceId} - ${totalPowerKw} kW`);
+
+    // Calculate current block
+    const currentBlock = await calculateCurrentBlock(meter.id);
+
+    // Get block info
+    const blockStart = getCurrentBlockStart(timestamp);
+    const blockEnd = getBlockEnd(blockStart);
+    const isPeak = isPeakHour(timestamp);
+
+    // Broadcast to all dashboards
+    const updateMessage = JSON.stringify({
+      type: 'dashboard:update',
+      meter,
+      reading,
+      currentBlock,
+      blockInfo: {
+        start: blockStart,
+        end: blockEnd,
+        isPeakHour: isPeak
+      },
+      timestamp: Date.now()
+    });
+
+    clients.dashboards.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(updateMessage);
+      }
+    });
+
+    const registration = clients.simulators.get(ws);
+    if (registration) {
+      registration.sequence = (registration.sequence || 0) + 1;
+    }
+
+    ws.send(JSON.stringify({
+      ...ackBase,
+      status: 'accepted',
+      dashboardsOnline: getDashboardStats().dashboardsOnline,
+      sequence: registration?.sequence || null
+    }));
+  } catch (error) {
+    console.error('Error handling simulator reading:', error);
+
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        ...ackBase,
+        status: 'error',
+        message: error.message
+      }));
+    }
+
+    error.silent = true;
+    throw error;
+  }
 }
 
 function validateSimulatorReading(data) {

@@ -88,6 +88,7 @@ export function useWebSocket(url: string): UseWebSocketReturn {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(data))
       console.debug(`📤 Sent WebSocket message: ${data.type || 'unknown-type'}`)
+      setConnectionError(null)
       return true
     } else {
       const readyState = wsRef.current?.readyState ?? WebSocket.CLOSED
