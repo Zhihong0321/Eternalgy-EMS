@@ -105,6 +105,36 @@ wss.on('connection', (ws, req) => {
           });
           break;
 
+        case 'simulator:handshake': {
+          const registration = clients.simulators.get(ws);
+          const dashboardsOnline = Array.from(clients.dashboards).filter(client => client.readyState === WebSocket.OPEN).length;
+          const dashboardsReady = dashboardsOnline > 0;
+
+          const status = registration
+            ? dashboardsReady
+              ? 'ok'
+              : 'warning'
+            : 'error';
+
+          const message = !registration
+            ? 'Simulator is not registered yet. Please reconnect or refresh the page.'
+            : dashboardsReady
+              ? `Dashboard ready. ${dashboardsOnline} dashboard${dashboardsOnline === 1 ? '' : 's'} connected.`
+              : 'No dashboards are connected. Data will queue once a dashboard joins.';
+
+          console.log(`🤝 Handshake request from ${registration?.simulatorName || 'unknown simulator'} -> dashboards online: ${dashboardsOnline}`);
+
+          ws.send(JSON.stringify({
+            type: 'simulator:handshake-ack',
+            status,
+            dashboardsOnline,
+            dashboardsReady,
+            message,
+            timestamp: Date.now()
+          }));
+          break;
+        }
+
         case 'dashboard:register':
           // Register as dashboard
           clients.dashboards.add(ws);
@@ -136,6 +166,7 @@ wss.on('connection', (ws, req) => {
 
         case 'simulator:reading':
           // Receive meter reading from simulator
+          validateSimulatorReading(data);
           await handleMeterReading(data, ws);
           break;
 
@@ -235,6 +266,28 @@ async function handleMeterReading(data, ws) {
       timestamp
     }
   }));
+}
+
+function validateSimulatorReading(data) {
+  if (!data.deviceId || typeof data.deviceId !== 'string') {
+    throw new Error('Invalid simulator payload: "deviceId" is required');
+  }
+
+  if (typeof data.totalPowerKw !== 'number' || Number.isNaN(data.totalPowerKw)) {
+    throw new Error('Invalid simulator payload: "totalPowerKw" must be a number');
+  }
+
+  if (typeof data.timestamp !== 'number' || Number.isNaN(data.timestamp)) {
+    throw new Error('Invalid simulator payload: "timestamp" must be a number');
+  }
+
+  if (data.frequency !== undefined && (typeof data.frequency !== 'number' || Number.isNaN(data.frequency))) {
+    throw new Error('Invalid simulator payload: "frequency" must be a number when provided');
+  }
+
+  if (data.readingInterval !== undefined && (typeof data.readingInterval !== 'number' || Number.isNaN(data.readingInterval))) {
+    throw new Error('Invalid simulator payload: "readingInterval" must be a number when provided');
+  }
 }
 
 /**

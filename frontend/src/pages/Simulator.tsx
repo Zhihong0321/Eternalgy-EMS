@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useWebSocket } from '../hooks/useWebSocket'
 import Button from '../components/Button'
 import Badge from '../components/Badge'
@@ -8,13 +8,29 @@ import { resolveWebSocketUrl } from '../config'
 
 const DEFAULT_WS_URL = 'ws://localhost:3000'
 
+type HandshakeState = 'idle' | 'pending' | 'success' | 'warning' | 'error'
+
+const HANDSHAKE_COLORS: Record<Exclude<HandshakeState, 'idle'>, 'brand' | 'success' | 'warning' | 'danger'> = {
+  pending: 'brand',
+  success: 'success',
+  warning: 'warning',
+  error: 'danger',
+}
+
+const HANDSHAKE_MESSAGES: Record<Exclude<HandshakeState, 'idle'>, string> = {
+  pending: 'Awaiting confirmation from dashboard...',
+  success: 'Dashboard confirmed and ready to receive data',
+  warning: 'No dashboard connected yet',
+  error: 'Handshake failed. Check dashboard status.',
+}
+
 export default function Simulator() {
   const wsUrl = useMemo(() => {
     const resolved = resolveWebSocketUrl()
     return resolved || DEFAULT_WS_URL
   }, [])
 
-  const { isConnected, send, lastMessage } = useWebSocket(wsUrl)
+  const { isConnected, send, lastMessage, connectionError } = useWebSocket(wsUrl)
 
   const [simulatorName, setSimulatorName] = useState(() => generateSimulatorName())
   const [isEditingName, setIsEditingName] = useState(false)
@@ -29,24 +45,119 @@ export default function Simulator() {
   const [sentCount, setSentCount] = useState(0)
   const [simulationMode, setSimulationMode] = useState<'auto' | 'manual'>('auto')
   const [fastForwardSpeed, setFastForwardSpeed] = useState(1) // 1x to 30x
+  const [handshakeStatus, setHandshakeStatus] = useState<HandshakeState>('idle')
+  const [handshakeDetails, setHandshakeDetails] = useState('')
+  const [eventLog, setEventLog] = useState<string[]>([])
+
+  const pushLog = useCallback((entry: string) => {
+    setEventLog((prev) => {
+      const timestamp = new Date().toLocaleTimeString()
+      const next = [`[${timestamp}] ${entry}`, ...prev]
+      return next.slice(0, 50)
+    })
+  }, [])
+
+  const previousConnectionRef = useRef(isConnected)
+
+  useEffect(() => {
+    if (isConnected && !previousConnectionRef.current) {
+      pushLog(`Connected to ${wsUrl}`)
+    } else if (!isConnected && previousConnectionRef.current) {
+      pushLog('Connection lost. Waiting to reconnect...')
+      setHandshakeStatus('idle')
+      setHandshakeDetails('')
+    }
+
+    previousConnectionRef.current = isConnected
+  }, [isConnected, pushLog, wsUrl])
+
+  useEffect(() => {
+    if (connectionError) {
+      pushLog(connectionError)
+    }
+  }, [connectionError, pushLog])
+
+  const requestHandshake = useCallback(() => {
+    const didSend = send({
+      type: 'simulator:handshake',
+      deviceId,
+      simulatorName,
+    })
+
+    if (didSend) {
+      setHandshakeStatus('pending')
+      setHandshakeDetails('Waiting for dashboard confirmation...')
+      pushLog('Sent handshake request to EMS backend')
+    } else {
+      setHandshakeStatus('error')
+      setHandshakeDetails('Unable to send handshake. Check connection logs.')
+      pushLog('Failed to send handshake request - WebSocket not connected')
+    }
+  }, [deviceId, simulatorName, send, pushLog])
 
   // Register as simulator when connected
   useEffect(() => {
     if (isConnected) {
-      send({
+      const didRegister = send({
         type: 'simulator:register',
         deviceId,
         simulatorName,
       })
-    }
-  }, [isConnected, deviceId, simulatorName, send])
 
-  // Handle acknowledgments
-  useEffect(() => {
-    if (lastMessage?.type === 'simulator:acknowledged') {
-      setSentCount((prev) => prev + 1)
+      if (!didRegister) {
+        pushLog('Registration message could not be sent. Waiting for reconnection...')
+      }
     }
-  }, [lastMessage])
+  }, [isConnected, deviceId, simulatorName, send, pushLog])
+
+  // Handle acknowledgments and handshake lifecycle
+  useEffect(() => {
+    if (!lastMessage) return
+
+    if (lastMessage.type === 'simulator:registered') {
+      pushLog(`Simulator registered as ${lastMessage.simulatorName} (${lastMessage.deviceId})`)
+      requestHandshake()
+      return
+    }
+
+    if (lastMessage.type === 'simulator:handshake-ack') {
+      const status: Exclude<HandshakeState, 'idle'> =
+        lastMessage.status === 'ok'
+          ? 'success'
+          : lastMessage.status === 'warning'
+            ? 'warning'
+            : 'error'
+
+      setHandshakeStatus(status)
+
+      const message = typeof lastMessage.message === 'string'
+        ? lastMessage.message
+        : HANDSHAKE_MESSAGES[status]
+
+      setHandshakeDetails(message)
+      pushLog(message)
+
+      return
+    }
+
+    if (lastMessage.type === 'simulator:acknowledged') {
+      setSentCount((prev) => prev + 1)
+      if (lastMessage.reading?.timestamp) {
+        const time = new Date(lastMessage.reading.timestamp).toLocaleTimeString()
+        pushLog(`Reading acknowledged at ${time}`)
+      }
+      return
+    }
+
+    if (lastMessage.type === 'error') {
+      setHandshakeStatus('error')
+      const message = typeof lastMessage.message === 'string'
+        ? lastMessage.message
+        : 'Server reported an unexpected error.'
+      setHandshakeDetails(message)
+      pushLog(`Server error: ${message}`)
+    }
+  }, [lastMessage, pushLog, requestHandshake])
 
   // Handle interval update with data wipe
   const handleUpdateInterval = async () => {
@@ -107,9 +218,10 @@ export default function Simulator() {
       // When fast-forwarding, send multiple readings
       const readingsToSend = fastForwardSpeed > 1 ? Math.ceil(fastForwardSpeed) : 1
 
+      let failedToSend = false
       for (let i = 0; i < readingsToSend; i++) {
         const timeOffset = i * (interval * 1000)
-        send({
+        const didSend = send({
           type: 'simulator:reading',
           deviceId,
           simulatorName,
@@ -118,17 +230,26 @@ export default function Simulator() {
           frequency: parseFloat(frequency.toFixed(2)),
           readingInterval: interval,
         })
+
+        if (!didSend) {
+          failedToSend = true
+          break
+        }
+      }
+
+      if (failedToSend) {
+        pushLog('Reading dispatch skipped: WebSocket not connected. Simulator will retry automatically.')
       }
     }, effectiveInterval)
 
     return () => window.clearInterval(timer)
-  }, [isRunning, isConnected, power, manualPower, volatility, interval, deviceId, simulatorName, frequency, send, simulationMode, fastForwardSpeed])
+  }, [isRunning, isConnected, power, manualPower, volatility, interval, deviceId, simulatorName, frequency, send, simulationMode, fastForwardSpeed, pushLog])
 
   const handleSendOnce = () => {
     const variation = (Math.random() - 0.5) * 2 * (volatility / 100)
     const currentPower = power * (1 + variation)
 
-    send({
+    const didSend = send({
       type: 'simulator:reading',
       deviceId,
       totalPowerKw: parseFloat(currentPower.toFixed(2)),
@@ -136,6 +257,12 @@ export default function Simulator() {
       frequency: parseFloat(frequency.toFixed(2)),
       readingInterval: interval,
     })
+
+    if (didSend) {
+      pushLog('Manual reading sent to EMS backend')
+    } else {
+      pushLog('Manual reading could not be sent. Check WebSocket connection.')
+    }
   }
 
   return (
@@ -152,12 +279,30 @@ export default function Simulator() {
         </div>
 
         {/* Connection Status */}
-        <div className="mb-6 flex items-center gap-4">
+        <div className="mb-6 flex flex-wrap items-center gap-3">
           <Badge
             variant="lg"
             color={isConnected ? 'available' : 'offline'}
             text={isConnected ? 'Connected' : 'Disconnected'}
           />
+
+          {handshakeStatus !== 'idle' && (
+            <Chip
+              variant="tint"
+              color={HANDSHAKE_COLORS[handshakeStatus as Exclude<HandshakeState, 'idle'>]}
+            >
+              {handshakeDetails || HANDSHAKE_MESSAGES[handshakeStatus as Exclude<HandshakeState, 'idle'>]}
+            </Chip>
+          )}
+
+          <Button
+            variant="border"
+            color="primary"
+            onClick={requestHandshake}
+            disabled={!isConnected || handshakeStatus === 'pending'}
+          >
+            {handshakeStatus === 'pending' ? 'Checking...' : 'Check connection'}
+          </Button>
 
           {isRunning && (
             <Chip variant="filled" color="success">
@@ -477,6 +622,23 @@ export default function Simulator() {
               <p className="font-semibold">{sentCount}</p>
             </div>
           </div>
+        </div>
+
+        {/* Connection Log */}
+        <div className="mt-6 bg-white shadow rounded-lg p-6">
+          <h3 className="text-lg font-semibold mb-3">Connection Log</h3>
+          <div className="h-48 overflow-y-auto bg-gray-50 border border-gray-200 rounded-md p-3 font-mono text-xs text-gray-700 space-y-1">
+            {eventLog.length > 0 ? (
+              eventLog.map((entry, index) => (
+                <div key={`${index}-${entry}`}>{entry}</div>
+              ))
+            ) : (
+              <p className="text-gray-500">Connection events will appear here.</p>
+            )}
+          </div>
+          {connectionError && (
+            <p className="text-sm text-red-600 mt-3">{connectionError}</p>
+          )}
         </div>
 
         {/* Instructions */}
