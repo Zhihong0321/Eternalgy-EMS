@@ -10,7 +10,7 @@ const WebSocket = require('ws');
 const cors = require('cors');
 
 const { getOrCreateMeter, insertReading, getCurrentBlock, getBlocksForToday } = require('./db/queries');
-const { calculateCurrentBlock, isPeakHour, getCurrentBlockStart, getBlockEnd } = require('./services/blockAggregator');
+const { calculateCurrentBlock, calculateBlockForTimestamp } = require('./services/blockAggregator');
 
 // Import debug API routes
 const debugRouter = require('./api/debug');
@@ -328,13 +328,16 @@ async function handleMeterReading(data, ws) {
 
     console.log(`📈 Reading received: ${deviceId} - ${totalPowerKw} kW`);
 
-    // Calculate current block
-    const currentBlock = await calculateCurrentBlock(meter.id);
+    // Calculate block using the reading timestamp to avoid clock skew issues
+    const {
+      block: currentBlock,
+      blockStart,
+      blockEnd,
+      isPeakHour: isPeak
+    } = await calculateBlockForTimestamp(meter.id, timestamp);
 
-    // Get block info
-    const blockStart = getCurrentBlockStart(timestamp);
-    const blockEnd = getBlockEnd(blockStart);
-    const isPeak = isPeakHour(timestamp);
+    const blockStartIso = blockStart instanceof Date ? blockStart.toISOString() : new Date(blockStart).toISOString();
+    const blockEndIso = blockEnd instanceof Date ? blockEnd.toISOString() : new Date(blockEnd).toISOString();
 
     // Broadcast to all dashboards
     const updateMessage = JSON.stringify({
@@ -343,8 +346,8 @@ async function handleMeterReading(data, ws) {
       reading,
       currentBlock,
       blockInfo: {
-        start: blockStart,
-        end: blockEnd,
+        start: blockStartIso,
+        end: blockEndIso,
         isPeakHour: isPeak
       },
       timestamp: Date.now()
