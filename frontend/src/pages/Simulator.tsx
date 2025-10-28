@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useWebSocket } from '../hooks/useWebSocket'
-import { Button, Badge, Chip } from '@peppermint-design/devreadykit'
+import Button from '../components/Button'
+import Badge from '../components/Badge'
+import Chip from '../components/Chip'
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3000'
 

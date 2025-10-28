@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useWebSocket } from '../hooks/useWebSocket'
-import { Badge, Chip, Progress } from '@peppermint-design/devreadykit'
+import Badge from '../components/Badge'
+import Chip from '../components/Chip'
+import Progress from '../components/Progress'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3000'
