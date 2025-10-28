@@ -10,13 +10,16 @@ const { query } = require('./connection');
  */
 
 // Get or create meter by device ID
-async function getOrCreateMeter(deviceId, isSimulator = false) {
+async function getOrCreateMeter(deviceId, isSimulator = false, clientName = null) {
   const result = await query(
-    `INSERT INTO meters (device_id, is_simulator)
-     VALUES ($1, $2)
-     ON CONFLICT (device_id) DO UPDATE SET updated_at = NOW()
+    `INSERT INTO meters (device_id, is_simulator, client_name)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (device_id) DO UPDATE SET
+       updated_at = NOW(),
+       is_simulator = EXCLUDED.is_simulator,
+       client_name = COALESCE(EXCLUDED.client_name, meters.client_name)
      RETURNING *`,
-    [deviceId, isSimulator]
+    [deviceId, isSimulator, clientName]
   );
   return result.rows[0];
 }
@@ -25,6 +28,61 @@ async function getOrCreateMeter(deviceId, isSimulator = false) {
 async function getAllMeters() {
   const result = await query('SELECT * FROM meters ORDER BY created_at DESC');
   return result.rows;
+}
+
+async function getMetersWithStats() {
+  const result = await query(
+    `SELECT
+       m.*, 
+       COALESCE(stats.reading_count, 0) AS reading_count,
+       stats.first_reading_timestamp,
+       stats.last_reading_timestamp,
+       stats.last_total_power_kw
+     FROM meters m
+     LEFT JOIN (
+       SELECT
+         r.meter_id,
+         COUNT(*)::BIGINT AS reading_count,
+         MIN(r.timestamp) AS first_reading_timestamp,
+         MAX(r.timestamp) AS last_reading_timestamp,
+         (ARRAY_AGG(r.total_power_kw ORDER BY r.timestamp DESC))[1] AS last_total_power_kw
+       FROM energy_readings r
+       GROUP BY r.meter_id
+     ) stats ON stats.meter_id = m.id
+     ORDER BY m.created_at DESC`
+  );
+  return result.rows;
+}
+
+// Get meter by ID
+async function getMeterById(meterId) {
+  const result = await query(
+    'SELECT * FROM meters WHERE id = $1 LIMIT 1',
+    [meterId]
+  );
+  return result.rows[0] || null;
+}
+
+// Get meter by device ID
+async function getMeterByDeviceId(deviceId) {
+  const result = await query(
+    'SELECT * FROM meters WHERE device_id = $1 LIMIT 1',
+    [deviceId]
+  );
+  return result.rows[0] || null;
+}
+
+async function updateMeterName(meterId, clientName) {
+  const result = await query(
+    `UPDATE meters
+     SET client_name = $1,
+         updated_at = NOW()
+     WHERE id = $2
+     RETURNING *`,
+    [clientName, meterId]
+  );
+
+  return result.rows[0] || null;
 }
 
 // Update meter reading interval
@@ -75,6 +133,20 @@ async function getLatestReading(meterId) {
     [meterId]
   );
   return result.rows[0];
+}
+
+// Get most recent readings for a meter
+async function getRecentReadings(meterId, limit = 30) {
+  const result = await query(
+    `SELECT * FROM energy_readings
+     WHERE meter_id = $1
+     ORDER BY timestamp DESC
+     LIMIT $2`,
+    [meterId, limit]
+  );
+
+  // Return in chronological order for charting
+  return result.rows.reverse();
 }
 
 /**
@@ -181,12 +253,17 @@ module.exports = {
   // Meters
   getOrCreateMeter,
   getAllMeters,
+  getMeterById,
+  getMeterByDeviceId,
+  getMetersWithStats,
+  updateMeterName,
   updateMeterReadingInterval,
 
   // Readings
   insertReading,
   getReadingsByTimeRange,
   getLatestReading,
+  getRecentReadings,
 
   // Blocks
   upsertBlock,

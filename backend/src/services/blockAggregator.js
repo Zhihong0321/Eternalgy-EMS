@@ -95,12 +95,23 @@ async function calculateBlock(meterId, blockStart, blockEnd) {
  * Calculate the current (possibly incomplete) 30-minute block
  * This is used for real-time dashboard updates
  */
-async function calculateCurrentBlock(meterId) {
-  const now = new Date();
-  const blockStart = getCurrentBlockStart(now);
+async function calculateBlockForTimestamp(meterId, timestamp = Date.now()) {
+  const blockStart = getCurrentBlockStart(timestamp);
   const blockEnd = getBlockEnd(blockStart);
 
-  return await calculateBlock(meterId, blockStart, blockEnd);
+  const block = await calculateBlock(meterId, blockStart, blockEnd);
+
+  return {
+    block,
+    blockStart,
+    blockEnd,
+    isPeakHour: isPeakHour(timestamp)
+  };
+}
+
+async function calculateCurrentBlock(meterId) {
+  const { block } = await calculateBlockForTimestamp(meterId, Date.now());
+  return block;
 }
 
 /**
@@ -145,6 +156,7 @@ module.exports = {
   getBlockEnd,
   isPeakHour,
   calculateBlock,
+  calculateBlockForTimestamp,
   calculateCurrentBlock,
   calculateBlocksForDay
 };
