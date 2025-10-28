@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+
+interface UseWebSocketOptions {
+  fallbackUrls?: string[]
+  retryDelayMs?: number
+}
 
 interface UseWebSocketReturn {
   ws: WebSocket | null
@@ -6,6 +11,7 @@ interface UseWebSocketReturn {
   send: (data: any) => boolean
   lastMessage: any
   connectionError: string | null
+  activeUrl: string | null
 }
 
 const readyStateMap: Record<number, string> = {
@@ -15,21 +21,39 @@ const readyStateMap: Record<number, string> = {
   3: 'CLOSED',
 }
 
-export function useWebSocket(url: string): UseWebSocketReturn {
+export function useWebSocket(url: string, options: UseWebSocketOptions = {}): UseWebSocketReturn {
   const [isConnected, setIsConnected] = useState(false)
   const [lastMessage, setLastMessage] = useState<any>(null)
   const [connectionError, setConnectionError] = useState<string | null>(null)
+  const [activeUrl, setActiveUrl] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<number>()
+  const manualCloseRef = useRef(false)
+  const candidatesRef = useRef<string[]>([])
+  const currentIndexRef = useRef(0)
 
-  const connect = useCallback(() => {
+  const retryDelayMs = options.retryDelayMs ?? 3000
+  const fallbackSignature = useMemo(() => JSON.stringify(options.fallbackUrls ?? []), [options.fallbackUrls])
+
+  const connectToIndex = useCallback((index: number) => {
+    const candidates = candidatesRef.current
+    const targetUrl = candidates[index]
+
+    if (!targetUrl) {
+      setConnectionError('No WebSocket URL available.')
+      return
+    }
+
     try {
-      const websocket = new WebSocket(url)
+      manualCloseRef.current = false
+      const websocket = new WebSocket(targetUrl)
 
       websocket.onopen = () => {
-        console.log(`✅ WebSocket connected to ${url}`)
+        console.log(`✅ WebSocket connected to ${targetUrl}`)
         setIsConnected(true)
         setConnectionError(null)
+        setActiveUrl(targetUrl)
+        currentIndexRef.current = index
       }
 
       websocket.onmessage = (event) => {
@@ -42,26 +66,44 @@ export function useWebSocket(url: string): UseWebSocketReturn {
       }
 
       websocket.onerror = (error) => {
-        console.error('❌ WebSocket error:', error)
-        setConnectionError('WebSocket encountered an error. Check console for details.')
+        console.error(`❌ WebSocket error (${targetUrl}):`, error)
+        setConnectionError(`WebSocket encountered an error while communicating with ${targetUrl}. Check console for details.`)
       }
 
       websocket.onclose = (event) => {
         const reason = event.reason || readyStateMap[websocket.readyState] || 'unknown'
-        const message = `WebSocket disconnected (code: ${event.code}${event.reason ? `, reason: ${event.reason}` : ''})`
+        const message = `WebSocket disconnected from ${targetUrl} (code: ${event.code}${event.reason ? `, reason: ${event.reason}` : ''})`
         console.log(message)
         setIsConnected(false)
+        setActiveUrl(null)
         wsRef.current = null
 
-        if (!event.wasClean) {
-          setConnectionError(`Connection closed unexpectedly (${reason}). Retrying...`)
+        if (manualCloseRef.current) {
+          manualCloseRef.current = false
+          return
         }
 
-        // Attempt to reconnect after 3 seconds
+        const wasAbnormal = !event.wasClean && event.code !== 1000
+        const nextIndex = index + 1
+
+        if (wasAbnormal && nextIndex < candidatesRef.current.length) {
+          const fallbackUrl = candidatesRef.current[nextIndex]
+          setConnectionError(`Connection closed unexpectedly (${reason}). Attempting fallback ${fallbackUrl}...`)
+          reconnectTimeoutRef.current = window.setTimeout(() => {
+            connectToIndex(nextIndex)
+          }, 500)
+          return
+        }
+
+        currentIndexRef.current = 0
+        const delaySeconds = Math.max(Math.round(retryDelayMs / 1000), 1)
+        if (wasAbnormal) {
+          setConnectionError(`Connection closed unexpectedly (${reason}). Retrying in ${delaySeconds}s...`)
+        }
+
         reconnectTimeoutRef.current = window.setTimeout(() => {
-          console.log('Attempting to reconnect...')
-          connect()
-        }, 3000)
+          connectToIndex(0)
+        }, retryDelayMs)
       }
 
       wsRef.current = websocket
@@ -69,20 +111,35 @@ export function useWebSocket(url: string): UseWebSocketReturn {
       console.error('Failed to create WebSocket:', error)
       setConnectionError('Failed to create WebSocket connection.')
     }
-  }, [url])
+  }, [retryDelayMs])
 
   useEffect(() => {
-    connect()
+    const fallbackUrls: string[] = JSON.parse(fallbackSignature)
+    const uniqueCandidates = Array.from(new Set([url, ...fallbackUrls].filter(Boolean)))
+    candidatesRef.current = uniqueCandidates
+    currentIndexRef.current = 0
+
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current)
+    }
+
+    if (wsRef.current) {
+      manualCloseRef.current = true
+      wsRef.current.close()
+    }
+
+    connectToIndex(0)
 
     return () => {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current)
       }
+      manualCloseRef.current = true
       if (wsRef.current) {
         wsRef.current.close()
       }
     }
-  }, [connect])
+  }, [url, fallbackSignature, connectToIndex])
 
   const send = useCallback((data: any) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -106,5 +163,6 @@ export function useWebSocket(url: string): UseWebSocketReturn {
     send,
     lastMessage,
     connectionError,
+    activeUrl,
   }
 }

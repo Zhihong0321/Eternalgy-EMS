@@ -17,7 +17,35 @@ const debugRouter = require('./api/debug');
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ noServer: true });
+
+const ALLOWED_WS_PATHS = new Set(['/', '/ws', '/socket', '/websocket']);
+
+server.on('upgrade', (request, socket, head) => {
+  try {
+    const requestUrl = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+    const path = requestUrl.pathname.replace(/\/+/g, '/');
+
+    if (!ALLOWED_WS_PATHS.has(path)) {
+      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      ws.upgradePath = path;
+      wss.emit('connection', ws, request);
+    });
+  } catch (error) {
+    console.error('Failed to process WebSocket upgrade request:', error);
+    try {
+      socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+    } catch (_) {
+      // ignore errors writing to socket
+    }
+    socket.destroy();
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 
@@ -134,7 +162,8 @@ function broadcastToDashboards(message) {
  * WebSocket Connection Handler
  */
 wss.on('connection', (ws, req) => {
-  console.log('🔌 New WebSocket connection');
+  const upgradePath = ws.upgradePath || req?.url || '/';
+  console.log(`🔌 New WebSocket connection (${upgradePath})`);
 
   ws.on('message', async (message) => {
     try {

@@ -4,7 +4,7 @@ import Button from '../components/Button'
 import Badge from '../components/Badge'
 import Chip from '../components/Chip'
 import { generateSimulatorName } from '../utils/nameGenerator'
-import { resolveWebSocketUrl } from '../config'
+import { resolveWebSocketConfig } from '../config'
 
 const DEFAULT_WS_URL = 'ws://localhost:3000'
 
@@ -36,12 +36,16 @@ const HANDSHAKE_REASON_LABELS: Record<string, string> = {
 }
 
 export default function Simulator() {
-  const wsUrl = useMemo(() => {
-    const resolved = resolveWebSocketUrl()
-    return resolved || DEFAULT_WS_URL
+  const { primaryUrl, fallbackUrls } = useMemo(() => {
+    const config = resolveWebSocketConfig()
+    const baseUrl = config.primaryUrl || DEFAULT_WS_URL
+    const fallbacks = config.fallbackUrls.filter((url) => url && url !== baseUrl)
+    return { primaryUrl: baseUrl, fallbackUrls: fallbacks }
   }, [])
 
-  const { isConnected, send, lastMessage, connectionError } = useWebSocket(wsUrl)
+  const { isConnected, send, lastMessage, connectionError, activeUrl } = useWebSocket(primaryUrl, {
+    fallbackUrls
+  })
 
   const [simulatorName, setSimulatorName] = useState(() => generateSimulatorName())
   const [isEditingName, setIsEditingName] = useState(false)
@@ -143,9 +147,12 @@ export default function Simulator() {
   const previousConnectionRef = useRef(isConnected)
   const previousRunningRef = useRef(isRunning)
 
+  const activeEndpoint = activeUrl || primaryUrl
+  const previousEndpointRef = useRef<string | null>(null)
+
   useEffect(() => {
     if (isConnected && !previousConnectionRef.current) {
-      pushLog(`Connected to ${wsUrl}`)
+      pushLog(`Connected to ${activeEndpoint}`)
     } else if (!isConnected && previousConnectionRef.current) {
       pushLog('Connection lost. Waiting to reconnect...')
       setHandshakeStatus('idle')
@@ -163,7 +170,20 @@ export default function Simulator() {
     }
 
     previousConnectionRef.current = isConnected
-  }, [isConnected, pushLog, wsUrl])
+  }, [isConnected, pushLog, activeEndpoint])
+
+  useEffect(() => {
+    if (isConnected && activeEndpoint !== previousEndpointRef.current) {
+      if (previousEndpointRef.current) {
+        pushLog(`Switched WebSocket endpoint to ${activeEndpoint}`)
+      }
+      previousEndpointRef.current = activeEndpoint
+    }
+
+    if (!isConnected) {
+      previousEndpointRef.current = null
+    }
+  }, [isConnected, activeEndpoint, pushLog])
 
   useEffect(() => {
     if (connectionError) {
@@ -489,6 +509,10 @@ export default function Simulator() {
 
           <Chip variant="tint" color={dashboardsChipColor}>
             {dashboardsOnline === 1 ? '1 dashboard online' : `${dashboardsOnline} dashboards online`}
+          </Chip>
+
+          <Chip variant="tint" color="brand">
+            {`Endpoint: ${activeEndpoint}`}
           </Chip>
 
           <Chip variant="tint" color="brand">

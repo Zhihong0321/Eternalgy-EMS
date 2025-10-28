@@ -3,7 +3,7 @@ import { useWebSocket } from '../hooks/useWebSocket'
 import Badge from '../components/Badge'
 import Chip from '../components/Chip'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
-import { resolveWebSocketUrl } from '../config'
+import { resolveWebSocketConfig } from '../config'
 
 const DEFAULT_WS_URL = 'ws://localhost:3000'
 
@@ -31,12 +31,18 @@ interface Simulator {
 }
 
 export default function Dashboard() {
-  const wsUrl = useMemo(() => {
-    const resolved = resolveWebSocketUrl()
-    return resolved || DEFAULT_WS_URL
+  const { primaryUrl, fallbackUrls } = useMemo(() => {
+    const config = resolveWebSocketConfig()
+    const baseUrl = config.primaryUrl || DEFAULT_WS_URL
+    const fallbacks = config.fallbackUrls.filter((url) => url && url !== baseUrl)
+    return { primaryUrl: baseUrl, fallbackUrls: fallbacks }
   }, [])
 
-  const { isConnected, send, lastMessage } = useWebSocket(wsUrl)
+  const { isConnected, send, lastMessage, activeUrl } = useWebSocket(primaryUrl, {
+    fallbackUrls
+  })
+
+  const activeEndpoint = activeUrl || primaryUrl
 
   const [readings, setReadings] = useState<Reading[]>([])
   const [currentBlock, setCurrentBlock] = useState<Block | null>(null)
@@ -213,6 +219,10 @@ export default function Dashboard() {
             color={isConnected ? 'available' : 'offline'}
             text={isConnected ? 'Connected' : 'Disconnected'}
           />
+
+          <Chip variant="tint" color="brand">
+            {`Endpoint: ${activeEndpoint}`}
+          </Chip>
 
           {meter && (
             <Chip variant="tint" color="brand">
