@@ -18,8 +18,8 @@ export default function Simulator() {
   const [frequency, setFrequency] = useState(60)
   const [isRunning, setIsRunning] = useState(false)
   const [volatility, setVolatility] = useState(10) // % variation
-  const [interval, setInterval] = useState(60) // seconds
-  const [previousInterval, setPreviousInterval] = useState(60) // track previous interval
+  const [interval, setInterval] = useState(60) // seconds - actual interval being used
+  const [tempInterval, setTempInterval] = useState(60) // temporary interval while dragging slider
   const [sentCount, setSentCount] = useState(0)
   const [simulationMode, setSimulationMode] = useState<'auto' | 'manual'>('auto')
   const [fastForwardSpeed, setFastForwardSpeed] = useState(1) // 1x to 30x
@@ -42,50 +42,48 @@ export default function Simulator() {
     }
   }, [lastMessage])
 
-  // Auto-wipe data when interval changes
-  useEffect(() => {
-    const handleIntervalChange = async () => {
-      if (interval !== previousInterval && !isRunning) {
-        const confirmed = window.confirm(
-          `Interval changed from ${previousInterval}s to ${interval}s.\n\n` +
-          `To prevent data conflicts, all previous data for this simulator will be wiped.\n\n` +
-          `Continue?`
-        )
-
-        if (confirmed) {
-          try {
-            // Use relative URL in production (same origin), absolute URL in dev
-            const API_URL = window.location.hostname === 'localhost'
-              ? 'http://localhost:3000'
-              : window.location.origin
-
-            const response = await fetch(`${API_URL}/api/simulators/data`, {
-              method: 'DELETE'
-            })
-
-            if (response.ok) {
-              const result = await response.json()
-              console.log(`Wiped data for ${result.deleted} simulator meters`)
-              setPreviousInterval(interval)
-              setSentCount(0)
-            } else {
-              throw new Error('Failed to wipe data')
-            }
-          } catch (error) {
-            console.error('Error wiping simulator data:', error)
-            alert('Failed to wipe simulator data. Please try using the wipe button in the Dashboard.')
-            // Revert interval change
-            setInterval(previousInterval)
-          }
-        } else {
-          // Revert interval change
-          setInterval(previousInterval)
-        }
-      }
+  // Handle interval update with data wipe
+  const handleUpdateInterval = async () => {
+    if (tempInterval === interval) {
+      alert('Interval is already set to this value')
+      return
     }
 
-    handleIntervalChange()
-  }, [interval, previousInterval, isRunning])
+    const confirmed = window.confirm(
+      `Interval will change from ${interval}s to ${tempInterval}s.\n\n` +
+      `To prevent data conflicts, all previous data for this simulator will be wiped.\n\n` +
+      `Continue?`
+    )
+
+    if (confirmed) {
+      try {
+        // Use relative URL in production (same origin), absolute URL in dev
+        const API_URL = window.location.hostname === 'localhost'
+          ? 'http://localhost:3000'
+          : window.location.origin
+
+        const response = await fetch(`${API_URL}/api/simulators/data`, {
+          method: 'DELETE'
+        })
+
+        if (response.ok) {
+          const result = await response.json()
+          console.log(`Wiped data for ${result.deleted} simulator meters`)
+          setInterval(tempInterval)
+          setSentCount(0)
+          alert(`Interval updated to ${tempInterval}s. ${result.deleted} simulator meters wiped.`)
+        } else {
+          throw new Error('Failed to wipe data')
+        }
+      } catch (error) {
+        console.error('Error wiping simulator data:', error)
+        alert('Failed to update interval. Please try using the wipe button in the Dashboard.')
+      }
+    } else {
+      // Revert temp interval
+      setTempInterval(interval)
+    }
+  }
 
   // Auto-send readings when running
   useEffect(() => {
@@ -356,16 +354,30 @@ export default function Simulator() {
 
           {/* Interval */}
           <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Send Interval: <span className="font-bold text-blue-600">{interval}s</span>
-            </label>
+            <div className="flex justify-between items-center mb-2">
+              <label className="block text-sm font-medium text-gray-700">
+                Send Interval: <span className="font-bold text-blue-600">{tempInterval}s</span>
+                {tempInterval !== interval && (
+                  <span className="ml-2 text-xs text-orange-600">(Current: {interval}s)</span>
+                )}
+              </label>
+              {tempInterval !== interval && (
+                <button
+                  onClick={handleUpdateInterval}
+                  disabled={isRunning}
+                  className="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white text-sm rounded-md font-medium transition-colors"
+                >
+                  Update Interval
+                </button>
+              )}
+            </div>
             <input
               type="range"
               min="1"
               max="120"
               step="1"
-              value={interval}
-              onChange={(e) => setInterval(Number(e.target.value))}
+              value={tempInterval}
+              onChange={(e) => setTempInterval(Number(e.target.value))}
               disabled={isRunning}
               className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
             />
@@ -374,6 +386,11 @@ export default function Simulator() {
               <span>60s (realistic)</span>
               <span>120s</span>
             </div>
+            {tempInterval !== interval && (
+              <p className="text-xs text-orange-600 mt-2">
+                ⚠️ Click "Update Interval" to apply changes (will wipe simulator data)
+              </p>
+            )}
           </div>
 
           {/* Fast Forward Speed */}
