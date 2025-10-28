@@ -1,33 +1,66 @@
-import { useState, useEffect, useMemo } from 'react'
-import { useWebSocket } from '../hooks/useWebSocket'
+import { useMemo, useState } from 'react'
 import Badge from '../components/Badge'
 import Chip from '../components/Chip'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceLine
+} from 'recharts'
 import { resolveWebSocketConfig } from '../config'
+import { useDashboardData } from '../hooks/useDashboardData'
+import { useDashboardRealtime } from '../hooks/useDashboardRealtime'
+import type { BlockRecord, EnergyReading } from '../types/dashboard'
+import { wipeSimulatorData } from '../utils/api'
 
 const DEFAULT_WS_URL = 'ws://localhost:3000'
 
-interface Reading {
+type ChartReading = {
   timestamp: number
-  total_power_kw: string
+  total_power_kw: number
   time: string
 }
 
-interface Block {
-  block_start: string
-  block_end: string
-  total_kwh: string
-  avg_power_kw: string
-  max_power_kw: string
-  min_power_kw: string
-  reading_count: number
-  is_peak_hour: boolean
+function normalizeReading(reading: EnergyReading): ChartReading {
+  const timestamp = typeof reading.timestamp === 'string' ? Number(reading.timestamp) : reading.timestamp
+  const totalPowerKw = parseFloat(reading.total_power_kw)
+
+  return {
+    timestamp,
+    total_power_kw: Number.isFinite(totalPowerKw) ? totalPowerKw : 0,
+    time: new Date(timestamp).toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  }
 }
 
-interface Simulator {
-  deviceId: string
-  simulatorName: string
-  meterId?: number
+function formatTime(dateString: string) {
+  return new Date(dateString).toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+function calculateMinutesRemaining(blockInfo?: { end: string } | null) {
+  if (!blockInfo) return 0
+  const blockEnd = new Date(blockInfo.end).getTime()
+  const diff = blockEnd - Date.now()
+  return diff > 0 ? Math.floor(diff / 60000) : 0
+}
+
+function deriveTargetProgress(block: BlockRecord | null, targetKwh: number) {
+  if (!block) {
+    return { currentKwh: 0, percentage: 0 }
+  }
+
+  const currentKwh = parseFloat(block.total_kwh)
+  const percentage = targetKwh > 0 ? (currentKwh / targetKwh) * 100 : 0
+  return { currentKwh, percentage }
 }
 
 export default function Dashboard() {
@@ -38,374 +71,341 @@ export default function Dashboard() {
     return { primaryUrl: baseUrl, fallbackUrls: fallbacks }
   }, [])
 
-  const { isConnected, send, lastMessage, activeUrl } = useWebSocket(primaryUrl, {
-    fallbackUrls
+  const {
+    meters,
+    selectedMeterId,
+    selectMeter,
+    snapshot,
+    readings,
+    connectedSimulators,
+    updateConnectedSimulators,
+    loading,
+    error,
+    refresh,
+    lastUpdated
+  } = useDashboardData()
+
+  const { isConnected, activeEndpoint, connectionError, logs, lastEvent } = useDashboardRealtime(primaryUrl, {
+    fallbackUrls,
+    requestSnapshot: (options) => refresh({ silent: options?.silent, meterId: options?.meterId }),
+    onSimulatorsUpdate: updateConnectedSimulators
   })
 
-  const activeEndpoint = activeUrl || primaryUrl
+  const [isWiping, setIsWiping] = useState(false)
 
-  const [readings, setReadings] = useState<Reading[]>([])
-  const [currentBlock, setCurrentBlock] = useState<Block | null>(null)
-  const [blockInfo, setBlockInfo] = useState<any>(null)
-  const [meter, setMeter] = useState<any>(null)
-  const [connectedSimulators, setConnectedSimulators] = useState<Simulator[]>([])
-  const [allMeters, setAllMeters] = useState<any[]>([])
-  const [selectedMeterId, setSelectedMeterId] = useState<number | null>(null)
-  const [lastTenBlocks, setLastTenBlocks] = useState<Block[]>([])
-  const [currentInterval, setCurrentInterval] = useState<number>(60) // Current meter reading interval
+  const meter = snapshot?.meter ?? null
+  const blockInfo = snapshot?.blockInfo ?? null
+  const currentBlock = snapshot?.currentBlock ?? null
+  const lastTenBlocks = snapshot?.lastTenBlocks ?? []
+  const dashboardsOnline = snapshot?.dashboardStats?.dashboardsOnline ?? 0
+  const hasDashboardsReady = snapshot?.dashboardStats?.dashboardsReady ?? false
 
-  // Register as dashboard when connected
-  useEffect(() => {
-    if (isConnected) {
-      send({
-        type: 'dashboard:register',
-      })
-    }
-  }, [isConnected, send])
+  const chartData = useMemo<ChartReading[]>(() => readings.map(normalizeReading), [readings])
+  const latestReading = chartData.length > 0 ? chartData[chartData.length - 1] : null
 
-  // Handle incoming messages
-  useEffect(() => {
-    if (!lastMessage) return
+  const targetKwh = 200
+  const { currentKwh, percentage } = useMemo(
+    () => deriveTargetProgress(currentBlock, targetKwh),
+    [currentBlock]
+  )
 
-    switch (lastMessage.type) {
-      case 'dashboard:initial':
-        // Initial data load
-        setMeter(lastMessage.meter)
-        if (lastMessage.meter?.reading_interval) {
-          setCurrentInterval(lastMessage.meter.reading_interval)
-        }
-        if (lastMessage.currentBlock) {
-          setCurrentBlock(lastMessage.currentBlock)
-        }
-        if (lastMessage.simulators) {
-          setConnectedSimulators(lastMessage.simulators)
-        }
-        if (lastMessage.allMeters) {
-          setAllMeters(lastMessage.allMeters)
-        }
-        if (lastMessage.lastTenBlocks) {
-          setLastTenBlocks(lastMessage.lastTenBlocks)
-        }
-        break
-
-      case 'dashboard:simulators-updated':
-        // Update simulators list
-        setConnectedSimulators(lastMessage.simulators || [])
-        break
-
-      case 'dashboard:update':
-        // Real-time update
-        setMeter(lastMessage.meter)
-        if (lastMessage.meter?.reading_interval) {
-          setCurrentInterval(lastMessage.meter.reading_interval)
-        }
-        setCurrentBlock(lastMessage.currentBlock)
-        setBlockInfo(lastMessage.blockInfo)
-
-        // Add new reading to chart
-        if (lastMessage.reading) {
-          const time = new Date(parseInt(lastMessage.reading.timestamp))
-          const timeStr = time.toLocaleTimeString('en-US', {
-            hour: '2-digit',
-            minute: '2-digit',
-          })
-
-          const newReading: Reading = {
-            ...lastMessage.reading,
-            time: timeStr,
-          }
-
-          setReadings((prev) => {
-            // Sort readings by timestamp and keep last 30 for the chart
-            const updated = [...prev, newReading].sort((a, b) =>
-              parseInt(a.timestamp.toString()) - parseInt(b.timestamp.toString())
-            ).slice(-30)
-            return updated
-          })
-        }
-        break
-    }
-  }, [lastMessage])
-
-  // Calculate progress percentage
-  const targetKwh = 200 // This would come from settings in real app
-  const currentKwh = currentBlock ? parseFloat(currentBlock.total_kwh) : 0
-  const percentage = (currentKwh / targetKwh) * 100
-
-  // Status color helper (for future use)
-  // const getStatusColor = () => {
-  //   if (percentage < 70) return 'success'
-  //   if (percentage < 90) return 'warning'
-  //   return 'danger'
-  // }
-
-  // Calculate time remaining in block
-  const getMinutesRemaining = () => {
-    if (!blockInfo) return 0
-    const blockEnd = new Date(blockInfo.end)
-    const now = new Date()
-    const diff = blockEnd.getTime() - now.getTime()
-    return Math.max(0, Math.floor(diff / 60000))
-  }
-
-  const formatTime = (dateString: string) => {
-    return new Date(dateString).toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  }
+  const minutesRemaining = useMemo(() => calculateMinutesRemaining(blockInfo), [blockInfo])
+  const lastUpdatedLabel = lastUpdated
+    ? lastUpdated.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : 'Never'
 
   const isPeakHour = blockInfo?.isPeakHour || false
-  const minutesRemaining = getMinutesRemaining()
+  const currentInterval = meter?.reading_interval ?? null
 
-  // Handle wipe simulator data
+  const handleMeterChange = (meterId: number) => {
+    selectMeter(meterId)
+  }
+
   const handleWipeSimulatorData = async () => {
+    if (isWiping) return
     if (!confirm('Are you sure you want to delete ALL simulator data? This cannot be undone!')) {
       return
     }
 
     try {
-      // Use relative URL in production (same origin), absolute URL in dev
-      const API_URL = window.location.hostname === 'localhost'
-        ? 'http://localhost:3000'
-        : window.location.origin
-
-      const response = await fetch(`${API_URL}/api/simulators/data`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-
-      const result = await response.json()
+      setIsWiping(true)
+      const result = await wipeSimulatorData()
       alert(`Successfully deleted ${result.deleted} simulator meters and their data`)
-
-      // Refresh the page or clear local state
-      window.location.reload()
-    } catch (error) {
-      console.error('Error wiping simulator data:', error)
-      alert(`Failed to wipe simulator data: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      await refresh({ silent: false })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to wipe simulator data'
+      alert(message)
+    } finally {
+      setIsWiping(false)
     }
   }
 
-  // Handle meter selection change
-  const handleMeterChange = async (meterId: number) => {
-    setSelectedMeterId(meterId)
-    // In a real implementation, we'd fetch data for this meter
-    // For now, just update the selection
-  }
+  const hasReadings = chartData.length > 0
 
   return (
     <div className="px-4 py-6">
-      <div className="max-w-6xl mx-auto">
-        {/* Header */}
-        <div className="mb-6">
-          <h2 className="text-3xl font-bold text-gray-900 mb-2">
-            Real-time Energy Dashboard
-          </h2>
-          <p className="text-gray-600">
-            Monitor 30-minute block usage and peak hour status
-          </p>
-        </div>
+      <div className="max-w-6xl mx-auto space-y-6">
+        <header>
+          <h2 className="text-3xl font-bold text-gray-900 mb-2">Stored Energy Insights</h2>
+          <p className="text-gray-600">View historical signals immediately, even when simulators are offline.</p>
+        </header>
 
-        {/* Connection Status */}
-        <div className="mb-6 flex items-center gap-4 flex-wrap">
-          <Badge
-            variant="lg"
-            color={isConnected ? 'available' : 'offline'}
-            text={isConnected ? 'Connected' : 'Disconnected'}
-          />
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md">
+            {error}
+          </div>
+        )}
 
-          <Chip variant="tint" color="brand">
-            {`Endpoint: ${activeEndpoint}`}
-          </Chip>
+        {/* Connection & data status */}
+        <section className="bg-white shadow rounded-lg p-6 space-y-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge
+              variant="lg"
+              color={isConnected ? 'available' : 'offline'}
+              text={isConnected ? 'Realtime Connected' : 'Realtime Offline'}
+            />
 
-          {meter && (
+            <Badge
+              variant="lg"
+              color={hasDashboardsReady ? 'available' : 'offline'}
+              text={`${dashboardsOnline} Dashboard${dashboardsOnline === 1 ? '' : 's'} Online`}
+            />
+
             <Chip variant="tint" color="brand">
-              {meter.device_id}
+              Endpoint: {activeEndpoint || primaryUrl}
             </Chip>
-          )}
 
-          {meter && (
+            {meter && (
+              <Chip variant="tint" color="brand">
+                {meter.device_id}
+              </Chip>
+            )}
+
+            {currentInterval && (
+              <Chip variant="tint" color="brand">
+                Reading Interval: {currentInterval}s
+              </Chip>
+            )}
+
             <Chip variant="tint" color="brand">
-              Reading Interval: {currentInterval}s
+              Snapshot refreshed: {lastUpdatedLabel}
             </Chip>
-          )}
-        </div>
 
-        {/* Connected Simulators & Controls */}
-        <div className="bg-white shadow rounded-lg p-6 mb-6">
-          <div className="flex justify-between items-start mb-4 flex-wrap gap-4">
-            <div className="flex-1">
-              <h3 className="text-lg font-semibold mb-3">Connected Simulators</h3>
+            {connectionError && (
+              <Chip variant="filled" color="warning">
+                {connectionError}
+              </Chip>
+            )}
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-6">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Connected Simulators</h3>
               {connectedSimulators.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
-                  {connectedSimulators.map((sim) => (
-                    <Chip key={sim.deviceId} variant="filled" color="success">
-                      {sim.simulatorName} ({sim.deviceId})
+                  {connectedSimulators.map((simulator) => (
+                    <Chip key={`${simulator.deviceId}-${simulator.simulatorName}`} variant="filled" color="success">
+                      {simulator.simulatorName} ({simulator.deviceId})
                     </Chip>
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-gray-500">No simulators connected</p>
+                <p className="text-sm text-gray-500">No simulators currently connected. Historical data remains available.</p>
               )}
             </div>
 
-            {/* Meter Selection */}
+            <div>
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Realtime Activity</h3>
+              <div className="bg-gray-50 border border-gray-200 rounded-md max-h-32 overflow-y-auto text-sm text-gray-700 p-3 space-y-1">
+                {logs.length === 0 ? (
+                  <p className="text-gray-500">Waiting for realtime events…</p>
+                ) : (
+                  logs
+                    .slice()
+                    .reverse()
+                    .map((entry) => (
+                      <div key={entry.id} className="flex justify-between gap-4">
+                        <span
+                          className={
+                            entry.tone === 'error'
+                              ? 'text-red-600'
+                              : entry.tone === 'warning'
+                              ? 'text-yellow-600'
+                              : 'text-gray-800'
+                          }
+                        >
+                          {entry.message}
+                        </span>
+                        <span className="text-gray-400">
+                          {new Date(entry.timestamp).toLocaleTimeString('en-US', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit'
+                          })}
+                        </span>
+                      </div>
+                    ))
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Meter selection & controls */}
+        <section className="bg-white shadow rounded-lg p-6 space-y-4">
+          <div className="flex flex-wrap gap-6 items-end justify-between">
             <div className="min-w-64">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Select Meter
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Select Meter</label>
               <select
-                value={selectedMeterId || meter?.id || ''}
-                onChange={(e) => handleMeterChange(Number(e.target.value))}
+                value={selectedMeterId || ''}
+                onChange={(event) => handleMeterChange(Number(event.target.value))}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={meters.length === 0}
               >
-                {allMeters.map((m) => (
+                {meters.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.device_id} {m.is_simulator ? '(Simulator)' : ''}
                   </option>
                 ))}
               </select>
             </div>
+
+            <div className="flex-1">
+              <p className="text-sm text-gray-500">
+                Charts refresh from stored readings on every snapshot. Use realtime events to track when new data is saved.
+              </p>
+              {latestReading && (
+                <p className="text-sm text-gray-600 mt-1">
+                  Latest stored reading at {new Date(latestReading.timestamp).toLocaleTimeString('en-US', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                  })}{' '}
+                  — {latestReading.total_power_kw.toFixed(2)} kW
+                </p>
+              )}
+            </div>
           </div>
 
-          {/* Wipe Simulator Data Button */}
           <div className="pt-4 border-t border-gray-200">
             <button
               onClick={handleWipeSimulatorData}
-              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md font-medium transition-colors"
+              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md font-medium transition-colors disabled:opacity-50"
+              disabled={isWiping}
             >
               🗑️ Wipe All Simulator Data
             </button>
             <p className="text-xs text-gray-500 mt-2">
-              This will delete all simulator meters and their readings from the database
+              This clears stored simulator readings without affecting live dashboards.
             </p>
           </div>
-        </div>
+        </section>
 
-        {/* Current Block Status */}
-        <div className="bg-white shadow rounded-lg p-6 mb-6">
-          <div className="flex justify-between items-start mb-4 flex-wrap gap-4">
+        {/* Current block summary */}
+        <section className="bg-white shadow rounded-lg p-6 space-y-6">
+          <div className="flex flex-wrap justify-between items-start gap-4">
             <div>
               <h3 className="text-2xl font-bold text-gray-900">
-                {blockInfo ? `${formatTime(blockInfo.start)} - ${formatTime(blockInfo.end)}` : 'Waiting for data...'}
+                {blockInfo ? `${formatTime(blockInfo.start)} - ${formatTime(blockInfo.end)}` : 'No block data yet'}
               </h3>
-              <p className="text-sm text-gray-600 mt-1">Current 30-minute block</p>
+              <p className="text-sm text-gray-600 mt-1">Current 30-minute block (calculated from stored readings)</p>
             </div>
 
-            <div className="flex gap-3 flex-wrap">
-              <Badge
-                variant="lg"
-                color={isPeakHour ? 'available' : 'offline'}
-                text={isPeakHour ? 'PEAK HOUR' : 'OFF-PEAK'}
-              />
-
+            <div className="flex gap-3 flex-wrap items-center">
+              <Badge variant="lg" color={isPeakHour ? 'available' : 'offline'} text={isPeakHour ? 'PEAK HOUR' : 'OFF-PEAK'} />
               {minutesRemaining > 0 && (
                 <Chip variant="filled" color="brand">
                   {minutesRemaining} min left
                 </Chip>
               )}
+              {loading && (
+                <Chip variant="tint" color="warning">
+                  Refreshing snapshot…
+                </Chip>
+              )}
+              {lastEvent && (
+                <Chip variant="tint" color={lastEvent.tone === 'error' ? 'danger' : 'brand'}>
+                  Last event: {lastEvent.message}
+                </Chip>
+              )}
             </div>
           </div>
 
-          {/* Improved Visual Usage Display */}
-          <div className="mb-6">
-            <div className="flex justify-between items-center mb-3">
-              <div>
-                <h4 className="text-lg font-semibold text-gray-900">Current Usage</h4>
-                <p className="text-sm text-gray-600">{currentBlock?.reading_count || 0} readings collected</p>
-              </div>
-              <div className="text-right">
-                <p className="text-4xl font-bold text-blue-600">{currentKwh.toFixed(3)} kWh</p>
-                <p className="text-sm text-gray-600">of {targetKwh} kWh target</p>
-              </div>
+          <div className="flex justify-between items-center flex-wrap gap-6">
+            <div>
+              <h4 className="text-lg font-semibold text-gray-900">Current Usage</h4>
+              <p className="text-sm text-gray-600">{currentBlock?.reading_count || 0} readings contributing</p>
             </div>
+            <div className="text-right">
+              <p className="text-4xl font-bold text-blue-600">{currentKwh.toFixed(3)} kWh</p>
+              <p className="text-sm text-gray-600">of {targetKwh} kWh target</p>
+            </div>
+          </div>
 
-            {/* Visual Bar Comparison */}
-            <div className="relative h-24 bg-gray-100 rounded-lg overflow-hidden">
-              {/* Target line */}
-              <div className="absolute top-0 left-0 right-0 h-full flex items-end">
-                {/* Current usage bar */}
-                <div
-                  className={`h-full transition-all duration-500 flex items-center justify-center text-white font-bold ${
-                    percentage < 70 ? 'bg-green-500' :
-                    percentage < 90 ? 'bg-yellow-500' :
-                    percentage < 100 ? 'bg-orange-500' : 'bg-red-500'
-                  }`}
-                  style={{ width: `${Math.min(percentage, 100)}%` }}
-                >
-                  {currentKwh.toFixed(2)} kWh
+          <div className="relative h-24 bg-gray-100 rounded-lg overflow-hidden">
+            <div className="absolute inset-0 flex items-center">
+              <div
+                className={`h-full transition-all duration-500 flex items-center justify-center text-white font-bold ${
+                  percentage < 70 ? 'bg-green-500' : percentage < 90 ? 'bg-yellow-500' : percentage < 100 ? 'bg-orange-500' : 'bg-red-500'
+                }`}
+                style={{ width: `${Math.min(percentage, 100)}%` }}
+              >
+                {currentKwh.toFixed(2)} kWh
+              </div>
+              {percentage < 100 && (
+                <div className="flex-1 h-full bg-gray-200 flex items-center justify-center text-gray-600 text-sm">
+                  {(targetKwh - currentKwh).toFixed(2)} kWh remaining
                 </div>
-                {/* Remaining to target */}
-                {percentage < 100 && (
-                  <div className="flex-1 h-full bg-gray-200 flex items-center justify-center text-gray-600 text-sm">
-                    {(targetKwh - currentKwh).toFixed(2)} kWh remaining
-                  </div>
-                )}
-              </div>
-              {/* Target marker */}
-              <div className="absolute top-0 bottom-0 border-r-4 border-gray-900 z-10" style={{ left: '100%' }}>
-                <span className="absolute -top-6 -right-8 text-xs font-bold text-gray-900">TARGET</span>
-              </div>
+              )}
             </div>
-
-            {/* Status and Stats */}
-            <div className="mt-4 flex justify-between items-center">
-              <div className="flex items-center gap-2">
-                {percentage < 70 && (
-                  <Chip variant="tint" color="success">
-                    ✅ {(100 - percentage).toFixed(0)}% buffer remaining
-                  </Chip>
-                )}
-                {percentage >= 70 && percentage < 90 && (
-                  <Chip variant="tint" color="warning">
-                    ⚠️ {(100 - percentage).toFixed(0)}% to target
-                  </Chip>
-                )}
-                {percentage >= 90 && percentage < 100 && (
-                  <Chip variant="filled" color="warning">
-                    🔔 {(100 - percentage).toFixed(0)}% left!
-                  </Chip>
-                )}
-                {percentage >= 100 && (
-                  <Chip variant="filled" color="danger">
-                    🚨 {(percentage - 100).toFixed(0)}% OVER!
-                  </Chip>
-                )}
-              </div>
-              <div className="text-sm text-gray-600">
-                <span className="font-semibold">{percentage.toFixed(1)}%</span> of target used
-              </div>
+            <div className="absolute top-0 bottom-0 border-r-4 border-gray-900 z-10" style={{ left: '100%' }}>
+              <span className="absolute -top-6 -right-8 text-xs font-bold text-gray-900">TARGET</span>
             </div>
           </div>
-        </div>
 
-        {/* Power Chart */}
-        <div className="bg-white shadow rounded-lg p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-4">
-            Real-time Power Readings (kW) - Current 30-Minute Block
-          </h3>
+          <div className="mt-4 flex justify-between items-center flex-wrap gap-4">
+            <div className="flex items-center gap-2">
+              {percentage < 70 && (
+                <Chip variant="tint" color="success">
+                  ✅ {(100 - percentage).toFixed(0)}% buffer remaining
+                </Chip>
+              )}
+              {percentage >= 70 && percentage < 90 && (
+                <Chip variant="tint" color="warning">
+                  ⚠️ {(100 - percentage).toFixed(0)}% to target
+                </Chip>
+              )}
+              {percentage >= 90 && percentage < 100 && (
+                <Chip variant="filled" color="warning">
+                  🔔 {(100 - percentage).toFixed(0)}% left!
+                </Chip>
+              )}
+              {percentage >= 100 && (
+                <Chip variant="filled" color="danger">
+                  🚨 {(percentage - 100).toFixed(0)}% OVER!
+                </Chip>
+              )}
+            </div>
+            <div className="text-sm text-gray-600">
+              <span className="font-semibold">{percentage.toFixed(1)}%</span> of target used
+            </div>
+          </div>
+        </section>
 
-          {readings.length > 0 ? (
+        {/* Power chart */}
+        <section className="bg-white shadow rounded-lg p-6">
+          <h3 className="text-lg font-semibold mb-4">Stored Power Readings (kW)</h3>
+          {hasReadings ? (
             <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={readings}>
+              <BarChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="time"
-                  tick={{ fontSize: 12 }}
-                  interval="preserveStartEnd"
-                />
+                <XAxis dataKey="time" tick={{ fontSize: 12 }} interval="preserveStartEnd" />
                 <YAxis tick={{ fontSize: 12 }} />
                 <Tooltip
                   contentStyle={{
                     backgroundColor: '#fff',
                     border: '1px solid #ccc',
-                    borderRadius: '4px',
+                    borderRadius: '4px'
                   }}
                 />
                 {currentBlock && (
@@ -428,61 +428,51 @@ export default function Dashboard() {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div className="h-64 flex items-center justify-center bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
-              <div className="text-center">
-                <p className="text-gray-500 mb-2">No data yet</p>
-                <p className="text-sm text-gray-400">
-                  Start the simulator to see real-time readings
+            <div className="h-64 flex items-center justify-center bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 text-center">
+              <div>
+                <p className="text-gray-600 font-medium">No stored readings yet.</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  Historical data will appear instantly after the first simulator upload.
                 </p>
               </div>
             </div>
           )}
-        </div>
+        </section>
 
-        {/* Last 10 Blocks History */}
+        {/* Last ten blocks */}
         {lastTenBlocks.length > 0 && (
-          <div className="bg-white shadow rounded-lg p-6 mb-6">
-            <h3 className="text-lg font-semibold mb-4">Last 10 × 30-Minute Blocks</h3>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <section className="bg-white shadow rounded-lg p-6 space-y-4">
+            <h3 className="text-lg font-semibold">Last 10 × 30-Minute Blocks</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
               {lastTenBlocks.map((block) => {
-                const blockKwh = parseFloat(block.total_kwh);
-                const blockPercentage = (blockKwh / targetKwh) * 100;
-                const isOver = blockPercentage > 100;
-                const isWarning = blockPercentage > 90;
+                const blockKwh = parseFloat(block.total_kwh)
+                const blockPercentage = targetKwh > 0 ? (blockKwh / targetKwh) * 100 : 0
+                const isOver = blockPercentage > 100
+                const isWarning = blockPercentage > 90 && blockPercentage <= 100
 
                 return (
                   <div key={block.block_start} className="border rounded-lg p-3 hover:shadow-md transition-shadow">
                     <p className="text-xs text-gray-600 mb-2 font-medium">
                       {formatTime(block.block_start)} - {formatTime(block.block_end)}
                     </p>
-                    <p className="text-lg font-bold mb-2 text-gray-900">
-                      {blockKwh.toFixed(3)} kWh
-                    </p>
-
-                    {/* Visual bar */}
+                    <p className="text-lg font-bold mb-2 text-gray-900">{blockKwh.toFixed(3)} kWh</p>
                     <div className="h-3 bg-gray-200 rounded-full overflow-hidden mb-2">
                       <div
                         className={`h-full transition-all ${
-                          isOver ? 'bg-red-500' :
-                          isWarning ? 'bg-orange-500' :
-                          'bg-green-500'
+                          isOver ? 'bg-red-500' : isWarning ? 'bg-orange-500' : 'bg-green-500'
                         }`}
                         style={{ width: `${Math.min(blockPercentage, 100)}%` }}
                       />
                     </div>
-
-                    {/* Status text */}
-                    <p className={`text-xs font-semibold ${
-                      isOver ? 'text-red-600' :
-                      isWarning ? 'text-orange-600' :
-                      'text-green-600'
-                    }`}>
+                    <p
+                      className={`text-xs font-semibold ${
+                        isOver ? 'text-red-600' : isWarning ? 'text-orange-600' : 'text-green-600'
+                      }`}
+                    >
                       {isOver
                         ? `${(blockPercentage - 100).toFixed(0)}% OVER`
-                        : `${(100 - blockPercentage).toFixed(0)}% buffer`
-                      }
+                        : `${Math.max(0, 100 - blockPercentage).toFixed(0)}% buffer`}
                     </p>
-
                     {block.is_peak_hour && (
                       <div className="mt-2">
                         <Chip variant="tint" color="warning">
@@ -491,15 +481,15 @@ export default function Dashboard() {
                       </div>
                     )}
                   </div>
-                );
+                )
               })}
             </div>
-          </div>
+          </section>
         )}
 
-        {/* Block Statistics */}
+        {/* Block statistics */}
         {currentBlock && (
-          <div className="bg-white shadow rounded-lg p-6">
+          <section className="bg-white shadow rounded-lg p-6">
             <h3 className="text-lg font-semibold mb-4">Block Statistics</h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div>
@@ -527,23 +517,17 @@ export default function Dashboard() {
                 </p>
               </div>
             </div>
-
-            <div className="mt-4 pt-4 border-t border-gray-200">
-              <p className="text-xs text-gray-500">
-                <strong>Calculation:</strong> Total kWh = Σ(Power readings) × (1/60) = {' '}
-                {(parseFloat(currentBlock.avg_power_kw) * currentBlock.reading_count).toFixed(2)} × 0.01667 ≈ {' '}
-                {parseFloat(currentBlock.total_kwh).toFixed(4)} kWh
-              </p>
+            <div className="mt-4 pt-4 border-t border-gray-200 text-xs text-gray-500">
+              <strong>Calculation:</strong> Stored total kWh is derived from all saved readings in the block.
             </div>
-          </div>
+          </section>
         )}
 
-        {/* Help Text */}
-        {!currentBlock && isConnected && (
+        {!currentBlock && !loading && (
           <div className="mt-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-            <h4 className="font-semibold text-yellow-900 mb-2">👋 Getting Started:</h4>
+            <h4 className="font-semibold text-yellow-900 mb-2">Need data?</h4>
             <p className="text-sm text-yellow-800">
-              Switch to the <strong>Simulator</strong> tab and start sending readings to see real-time data here!
+              Run the simulator to push new readings. They will be stored automatically and appear here after the next snapshot.
             </p>
           </div>
         )}

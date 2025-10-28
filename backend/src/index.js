@@ -9,7 +9,17 @@ const http = require('http');
 const WebSocket = require('ws');
 const cors = require('cors');
 
-const { getOrCreateMeter, insertReading, getCurrentBlock, getBlocksForToday } = require('./db/queries');
+const {
+  getOrCreateMeter,
+  insertReading,
+  getCurrentBlock,
+  getBlocksForToday,
+  getAllMeters,
+  getMeterById,
+  getMeterByDeviceId,
+  getRecentReadings,
+  getLastNBlocks
+} = require('./db/queries');
 const { calculateCurrentBlock, calculateBlockForTimestamp } = require('./services/blockAggregator');
 
 // Import debug API routes
@@ -287,7 +297,6 @@ wss.on('connection', (ws, req) => {
           console.log('📊 Dashboard registered');
 
           // Send initial data
-          const { getAllMeters, getLastNBlocks } = require('./db/queries');
           const meters = await getAllMeters();
           const defaultMeter = meters.find(m => m.is_simulator) || meters[0];
 
@@ -523,6 +532,75 @@ app.get('/api/meters/:deviceId/blocks/today', async (req, res) => {
     const blocks = await getBlocksForToday(meter.id);
     res.json(blocks);
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Dashboard snapshot endpoint - returns stored signals and summary data
+app.get('/api/dashboard/snapshot', async (req, res) => {
+  try {
+    const { meterId: meterIdParam, deviceId, limit } = req.query;
+
+    let targetMeter = null;
+
+    if (meterIdParam) {
+      const parsedId = Number(meterIdParam);
+      if (!Number.isNaN(parsedId)) {
+        targetMeter = await getMeterById(parsedId);
+      }
+    }
+
+    if (!targetMeter && deviceId) {
+      targetMeter = await getMeterByDeviceId(deviceId);
+    }
+
+    const meters = await getAllMeters();
+
+    if (!targetMeter) {
+      targetMeter = meters.find(m => m.is_simulator) || meters[0] || null;
+    }
+
+    if (!targetMeter) {
+      return res.status(404).json({ error: 'No meters available' });
+    }
+
+    const readingLimit = limit ? Math.max(1, Math.min(500, Number(limit))) : 60;
+
+    const snapshotTimestamp = Date.now();
+    const { block: currentBlock, blockStart, blockEnd, isPeakHour } = await calculateBlockForTimestamp(
+      targetMeter.id,
+      snapshotTimestamp
+    );
+
+    const [blocksToday, lastTenBlocks, recentReadings] = await Promise.all([
+      getBlocksForToday(targetMeter.id),
+      getLastNBlocks(targetMeter.id, 10),
+      getRecentReadings(targetMeter.id, readingLimit)
+    ]);
+
+    const blockInfo = {
+      start: blockStart instanceof Date ? blockStart.toISOString() : new Date(blockStart).toISOString(),
+      end: blockEnd instanceof Date ? blockEnd.toISOString() : new Date(blockEnd).toISOString(),
+      isPeakHour
+    };
+
+    const dashboardStats = getDashboardStats();
+    const simulatorsOnline = getConnectedSimulators();
+
+    res.json({
+      timestamp: snapshotTimestamp,
+      meter: targetMeter,
+      allMeters: meters,
+      currentBlock,
+      blockInfo,
+      blocksToday,
+      lastTenBlocks,
+      readings: recentReadings,
+      connectedSimulators: simulatorsOnline,
+      dashboardStats
+    });
+  } catch (error) {
+    console.error('Failed to build dashboard snapshot:', error);
     res.status(500).json({ error: error.message });
   }
 });

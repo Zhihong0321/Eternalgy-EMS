@@ -27,6 +27,24 @@ async function getAllMeters() {
   return result.rows;
 }
 
+// Get meter by ID
+async function getMeterById(meterId) {
+  const result = await query(
+    'SELECT * FROM meters WHERE id = $1 LIMIT 1',
+    [meterId]
+  );
+  return result.rows[0] || null;
+}
+
+// Get meter by device ID
+async function getMeterByDeviceId(deviceId) {
+  const result = await query(
+    'SELECT * FROM meters WHERE device_id = $1 LIMIT 1',
+    [deviceId]
+  );
+  return result.rows[0] || null;
+}
+
 // Update meter reading interval
 async function updateMeterReadingInterval(meterId, readingInterval) {
   const result = await query(
@@ -75,6 +93,20 @@ async function getLatestReading(meterId) {
     [meterId]
   );
   return result.rows[0];
+}
+
+// Get most recent readings for a meter
+async function getRecentReadings(meterId, limit = 30) {
+  const result = await query(
+    `SELECT * FROM energy_readings
+     WHERE meter_id = $1
+     ORDER BY timestamp DESC
+     LIMIT $2`,
+    [meterId, limit]
+  );
+
+  // Return in chronological order for charting
+  return result.rows.reverse();
 }
 
 /**
@@ -181,12 +213,15 @@ module.exports = {
   // Meters
   getOrCreateMeter,
   getAllMeters,
+  getMeterById,
+  getMeterByDeviceId,
   updateMeterReadingInterval,
 
   // Readings
   insertReading,
   getReadingsByTimeRange,
   getLatestReading,
+  getRecentReadings,
 
   // Blocks
   upsertBlock,
