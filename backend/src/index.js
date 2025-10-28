@@ -112,18 +112,21 @@ wss.on('connection', (ws, req) => {
           console.log('📊 Dashboard registered');
 
           // Send initial data
-          const meters = await require('./db/queries').getAllMeters();
+          const { getAllMeters, getLastNBlocks } = require('./db/queries');
+          const meters = await getAllMeters();
           const defaultMeter = meters.find(m => m.is_simulator) || meters[0];
 
           if (defaultMeter) {
             const currentBlock = await calculateCurrentBlock(defaultMeter.id);
             const blocksToday = await getBlocksForToday(defaultMeter.id);
+            const lastTenBlocks = await getLastNBlocks(defaultMeter.id, 10);
 
             ws.send(JSON.stringify({
               type: 'dashboard:initial',
               meter: defaultMeter,
               currentBlock,
               blocksToday,
+              lastTenBlocks,
               simulators: getConnectedSimulators(),
               allMeters: meters,
               timestamp: Date.now()

@@ -2,8 +2,7 @@ import { useState, useEffect } from 'react'
 import { useWebSocket } from '../hooks/useWebSocket'
 import Badge from '../components/Badge'
 import Chip from '../components/Chip'
-import Progress from '../components/Progress'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3000'
 
@@ -40,6 +39,7 @@ export default function Dashboard() {
   const [connectedSimulators, setConnectedSimulators] = useState<Simulator[]>([])
   const [allMeters, setAllMeters] = useState<any[]>([])
   const [selectedMeterId, setSelectedMeterId] = useState<number | null>(null)
+  const [lastTenBlocks, setLastTenBlocks] = useState<Block[]>([])
 
   // Register as dashboard when connected
   useEffect(() => {
@@ -66,6 +66,9 @@ export default function Dashboard() {
         }
         if (lastMessage.allMeters) {
           setAllMeters(lastMessage.allMeters)
+        }
+        if (lastMessage.lastTenBlocks) {
+          setLastTenBlocks(lastMessage.lastTenBlocks)
         }
         break
 
@@ -266,78 +269,87 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Usage Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            <div className="bg-blue-50 rounded-lg p-4">
-              <p className="text-sm text-blue-600 font-medium mb-1">Current Usage</p>
-              <p className="text-3xl font-bold text-blue-900">
-                {currentKwh.toFixed(2)} kWh
-              </p>
+          {/* Improved Visual Usage Display */}
+          <div className="mb-6">
+            <div className="flex justify-between items-center mb-3">
+              <div>
+                <h4 className="text-lg font-semibold text-gray-900">Current Usage</h4>
+                <p className="text-sm text-gray-600">{currentBlock?.reading_count || 0} readings collected</p>
+              </div>
+              <div className="text-right">
+                <p className="text-4xl font-bold text-blue-600">{currentKwh.toFixed(3)} kWh</p>
+                <p className="text-sm text-gray-600">of {targetKwh} kWh target</p>
+              </div>
             </div>
 
-            <div className="bg-gray-50 rounded-lg p-4">
-              <p className="text-sm text-gray-600 font-medium mb-1">Target</p>
-              <p className="text-3xl font-bold text-gray-900">{targetKwh} kWh</p>
+            {/* Visual Bar Comparison */}
+            <div className="relative h-24 bg-gray-100 rounded-lg overflow-hidden">
+              {/* Target line */}
+              <div className="absolute top-0 left-0 right-0 h-full flex items-end">
+                {/* Current usage bar */}
+                <div
+                  className={`h-full transition-all duration-500 flex items-center justify-center text-white font-bold ${
+                    percentage < 70 ? 'bg-green-500' :
+                    percentage < 90 ? 'bg-yellow-500' :
+                    percentage < 100 ? 'bg-orange-500' : 'bg-red-500'
+                  }`}
+                  style={{ width: `${Math.min(percentage, 100)}%` }}
+                >
+                  {currentKwh.toFixed(2)} kWh
+                </div>
+                {/* Remaining to target */}
+                {percentage < 100 && (
+                  <div className="flex-1 h-full bg-gray-200 flex items-center justify-center text-gray-600 text-sm">
+                    {(targetKwh - currentKwh).toFixed(2)} kWh remaining
+                  </div>
+                )}
+              </div>
+              {/* Target marker */}
+              <div className="absolute top-0 bottom-0 border-r-4 border-gray-900 z-10" style={{ left: '100%' }}>
+                <span className="absolute -top-6 -right-8 text-xs font-bold text-gray-900">TARGET</span>
+              </div>
             </div>
 
-            <div className="bg-purple-50 rounded-lg p-4">
-              <p className="text-sm text-purple-600 font-medium mb-1">Readings</p>
-              <p className="text-3xl font-bold text-purple-900">
-                {currentBlock?.reading_count || 0}
-              </p>
+            {/* Status and Stats */}
+            <div className="mt-4 flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                {percentage < 70 && (
+                  <Chip variant="tint" color="success">
+                    ✅ {(100 - percentage).toFixed(0)}% buffer remaining
+                  </Chip>
+                )}
+                {percentage >= 70 && percentage < 90 && (
+                  <Chip variant="tint" color="warning">
+                    ⚠️ {(100 - percentage).toFixed(0)}% to target
+                  </Chip>
+                )}
+                {percentage >= 90 && percentage < 100 && (
+                  <Chip variant="filled" color="warning">
+                    🔔 {(100 - percentage).toFixed(0)}% left!
+                  </Chip>
+                )}
+                {percentage >= 100 && (
+                  <Chip variant="filled" color="danger">
+                    🚨 {(percentage - 100).toFixed(0)}% OVER!
+                  </Chip>
+                )}
+              </div>
+              <div className="text-sm text-gray-600">
+                <span className="font-semibold">{percentage.toFixed(1)}%</span> of target used
+              </div>
             </div>
-          </div>
-
-          {/* Progress Bar */}
-          <div className="mb-4">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-sm font-medium text-gray-700">
-                Progress toward target
-              </span>
-              <span className="text-sm font-bold text-gray-900">
-                {percentage.toFixed(1)}%
-              </span>
-            </div>
-            <Progress
-              value={percentage}
-              className="h-4"
-            />
-          </div>
-
-          {/* Status Indicator */}
-          <div className="flex items-center gap-2">
-            {percentage < 70 && (
-              <Chip variant="tint" color="success">
-                ✅ On Track
-              </Chip>
-            )}
-            {percentage >= 70 && percentage < 90 && (
-              <Chip variant="tint" color="warning">
-                ⚠️ Approaching Target
-              </Chip>
-            )}
-            {percentage >= 90 && percentage < 100 && (
-              <Chip variant="filled" color="warning">
-                🔔 Near Limit
-              </Chip>
-            )}
-            {percentage >= 100 && (
-              <Chip variant="filled" color="danger">
-                🚨 Over Target!
-              </Chip>
-            )}
           </div>
         </div>
 
         {/* Power Chart */}
         <div className="bg-white shadow rounded-lg p-6 mb-6">
           <h3 className="text-lg font-semibold mb-4">
-            Real-time Power Readings (kW)
+            Real-time Power Readings (kW) - Current 30-Minute Block
           </h3>
 
           {readings.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={readings}>
+              <BarChart data={readings}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis
                   dataKey="time"
@@ -368,15 +380,8 @@ export default function Dashboard() {
                     />
                   </>
                 )}
-                <Line
-                  type="monotone"
-                  dataKey="total_power_kw"
-                  stroke="#2563eb"
-                  strokeWidth={2}
-                  dot={{ r: 3 }}
-                  activeDot={{ r: 5 }}
-                />
-              </LineChart>
+                <Bar dataKey="total_power_kw" fill="#2563eb" />
+              </BarChart>
             </ResponsiveContainer>
           ) : (
             <div className="h-64 flex items-center justify-center bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
@@ -389,6 +394,64 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+
+        {/* Last 10 Blocks History */}
+        {lastTenBlocks.length > 0 && (
+          <div className="bg-white shadow rounded-lg p-6 mb-6">
+            <h3 className="text-lg font-semibold mb-4">Last 10 × 30-Minute Blocks</h3>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              {lastTenBlocks.map((block) => {
+                const blockKwh = parseFloat(block.total_kwh);
+                const blockPercentage = (blockKwh / targetKwh) * 100;
+                const isOver = blockPercentage > 100;
+                const isWarning = blockPercentage > 90;
+
+                return (
+                  <div key={block.block_start} className="border rounded-lg p-3 hover:shadow-md transition-shadow">
+                    <p className="text-xs text-gray-600 mb-2 font-medium">
+                      {formatTime(block.block_start)} - {formatTime(block.block_end)}
+                    </p>
+                    <p className="text-lg font-bold mb-2 text-gray-900">
+                      {blockKwh.toFixed(3)} kWh
+                    </p>
+
+                    {/* Visual bar */}
+                    <div className="h-3 bg-gray-200 rounded-full overflow-hidden mb-2">
+                      <div
+                        className={`h-full transition-all ${
+                          isOver ? 'bg-red-500' :
+                          isWarning ? 'bg-orange-500' :
+                          'bg-green-500'
+                        }`}
+                        style={{ width: `${Math.min(blockPercentage, 100)}%` }}
+                      />
+                    </div>
+
+                    {/* Status text */}
+                    <p className={`text-xs font-semibold ${
+                      isOver ? 'text-red-600' :
+                      isWarning ? 'text-orange-600' :
+                      'text-green-600'
+                    }`}>
+                      {isOver
+                        ? `${(blockPercentage - 100).toFixed(0)}% OVER`
+                        : `${(100 - blockPercentage).toFixed(0)}% buffer`
+                      }
+                    </p>
+
+                    {block.is_peak_hour && (
+                      <div className="mt-2">
+                        <Chip variant="tint" color="warning">
+                          Peak
+                        </Chip>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Block Statistics */}
         {currentBlock && (

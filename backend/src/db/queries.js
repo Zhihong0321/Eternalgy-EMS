@@ -114,6 +114,19 @@ async function getBlocksForToday(meterId) {
   return result.rows;
 }
 
+// Get last N completed blocks
+async function getLastNBlocks(meterId, limit = 10) {
+  const result = await query(
+    `SELECT * FROM thirty_min_blocks
+     WHERE meter_id = $1
+       AND block_end <= NOW()
+     ORDER BY block_start DESC
+     LIMIT $2`,
+    [meterId, limit]
+  );
+  return result.rows.reverse(); // Return in chronological order
+}
+
 // Get blocks in time range
 async function getBlocksByTimeRange(meterId, startTime, endTime) {
   const result = await query(
@@ -167,6 +180,7 @@ module.exports = {
   getCurrentBlock,
   getBlocksForToday,
   getBlocksByTimeRange,
+  getLastNBlocks,
 
   // Admin
   deleteSimulatorData
