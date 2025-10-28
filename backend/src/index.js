@@ -20,6 +20,23 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ noServer: true });
 
 const ALLOWED_WS_PATHS = new Set(['/', '/ws', '/socket', '/websocket']);
+const WS_HEARTBEAT_INTERVAL_MS = parseInt(process.env.WS_HEARTBEAT_INTERVAL_MS || '25000', 10);
+
+function isValidHeartbeatInterval(value) {
+  return Number.isFinite(value) && value > 0;
+}
+
+if (!Number.isFinite(WS_HEARTBEAT_INTERVAL_MS) || WS_HEARTBEAT_INTERVAL_MS <= 0) {
+  console.warn(
+    `Invalid WS_HEARTBEAT_INTERVAL_MS value (${process.env.WS_HEARTBEAT_INTERVAL_MS}). Falling back to 25000ms.`
+  );
+}
+
+const heartbeatIntervalMs = isValidHeartbeatInterval(WS_HEARTBEAT_INTERVAL_MS)
+  ? WS_HEARTBEAT_INTERVAL_MS
+  : 25000;
+
+const HEARTBEAT_STATE_KEY = Symbol('wsHeartbeatState');
 
 server.on('upgrade', (request, socket, head) => {
   try {
@@ -65,6 +82,50 @@ const clients = {
   simulators: new Map(), // Map of ws -> {deviceId, simulatorName, meter, sequence}
   dashboards: new Set()
 };
+
+function ensureHeartbeatState(ws) {
+  if (!ws[HEARTBEAT_STATE_KEY]) {
+    ws[HEARTBEAT_STATE_KEY] = { isAlive: true };
+  }
+  return ws[HEARTBEAT_STATE_KEY];
+}
+
+function markSocketAlive(ws) {
+  const state = ensureHeartbeatState(ws);
+  state.isAlive = true;
+}
+
+if (heartbeatIntervalMs > 0) {
+  const heartbeatTimer = setInterval(() => {
+    wss.clients.forEach((client) => {
+      if (client.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      const state = ensureHeartbeatState(client);
+
+      if (!state.isAlive) {
+        console.warn('Terminating stale WebSocket connection after missed heartbeat');
+        try {
+          client.terminate();
+        } catch (error) {
+          console.error('Failed to terminate stale WebSocket connection:', error);
+        }
+        return;
+      }
+
+      state.isAlive = false;
+
+      try {
+        client.ping();
+      } catch (error) {
+        console.error('Failed to send heartbeat ping:', error);
+      }
+    });
+  }, heartbeatIntervalMs);
+
+  wss.on('close', () => clearInterval(heartbeatTimer));
+}
 
 function getDashboardStats() {
   const dashboardsOnline = Array.from(clients.dashboards).filter(client => client.readyState === WebSocket.OPEN).length;
@@ -165,8 +226,13 @@ wss.on('connection', (ws, req) => {
   const upgradePath = ws.upgradePath || req?.url || '/';
   console.log(`🔌 New WebSocket connection (${upgradePath})`);
 
+  markSocketAlive(ws);
+  ws.on('pong', () => markSocketAlive(ws));
+  ws.on('ping', () => markSocketAlive(ws));
+
   ws.on('message', async (message) => {
     try {
+      markSocketAlive(ws);
       const data = JSON.parse(message);
 
       switch (data.type) {
