@@ -704,8 +704,14 @@ async function ensureDbMigrations() {
     console.error('❌ Failed to ensure DB migrations:', err);
   }
 }
-server.listen(PORT, () => {
-  console.log(`
+async function startServer() {
+  try {
+    await ensureDbMigrations();
+  } catch (err) {
+    console.error('Failed to run DB migrations before startup:', err);
+  }
+  server.listen(PORT, () => {
+    console.log(`
 ╔══════════════════════════════════════════╗
 ║   Eternalgy EMS Backend Server           ║
 ╠══════════════════════════════════════════╣
