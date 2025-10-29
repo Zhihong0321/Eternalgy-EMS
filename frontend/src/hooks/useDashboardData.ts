@@ -37,6 +37,9 @@ export function useDashboardData(initialMeterId?: number): UseDashboardDataResul
   const [error, setError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const requestIdRef = useRef(0)
+  // Cooldown to avoid spamming failing endpoints
+  const cooldownUntilRef = useRef<number>(0)
+  const failuresRef = useRef<number>(0)
 
   const initializeMeters = useCallback(async () => {
     try {
@@ -104,11 +107,12 @@ export function useDashboardData(initialMeterId?: number): UseDashboardDataResul
     }
     setError(null)
 
+    // If we are in cooldown due to repeated failures, skip silent refreshes
+    if (options.silent && cooldownUntilRef.current > Date.now()) {
+      return
+    }
+
     try {
-      // Warm up backend before snapshot request. Ignore errors but wait briefly.
-      try {
-        await getHealth()
-      } catch {}
       const snapshotResponse = await getDashboardSnapshot({ meterId: targetMeterId, limit: 120 })
       if (requestIdRef.current !== requestId) {
         return
@@ -131,6 +135,9 @@ export function useDashboardData(initialMeterId?: number): UseDashboardDataResul
       }
 
       setLastUpdated(new Date(snapshotResponse.timestamp))
+      // Reset failure tracking on success
+      failuresRef.current = 0
+      cooldownUntilRef.current = 0
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load dashboard snapshot'
       const isAbort = err instanceof DOMException && err.name === 'AbortError'
@@ -140,6 +147,12 @@ export function useDashboardData(initialMeterId?: number): UseDashboardDataResul
         return
       }
       setError(message)
+      // Increment failures and start cooldown after too many consecutive failures
+      failuresRef.current += 1
+      if (failuresRef.current >= 3) {
+        // 15s cooldown window to prevent repeated failing requests
+        cooldownUntilRef.current = Date.now() + 15000
+      }
     } finally {
       if (!options.silent && requestIdRef.current === requestId) {
         setLoading(false)
