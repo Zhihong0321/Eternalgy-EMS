@@ -1,17 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Badge from '../components/Badge'
 import Chip from '../components/Chip'
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  ReferenceLine,
-  Line
-} from 'recharts'
+import EnergyUsageChart from '../components/EnergyUsageChart'
 import { resolveWebSocketConfig } from '../config'
 import { useDashboardData } from '../hooks/useDashboardData'
 import { useDashboardRealtime } from '../hooks/useDashboardRealtime'
@@ -439,40 +429,24 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
           </div>
         </section>
 
-        {/* Power chart */}
+        {/* Energy usage chart (updated design) */}
         <section className="bg-[#111827] text-white rounded-xl p-6 shadow-lg">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold">Charging Analysis</h3>
+            <h3 className="text-lg font-semibold">Energy Usage</h3>
             <div className="flex gap-2">
               <button className="px-3 py-1 rounded-full text-sm bg-[#1f2937] hover:bg-[#374151]">Week</button>
               <button className="px-3 py-1 rounded-full text-sm bg-[#1f2937] hover:bg-[#374151]">Month</button>
               <button className="px-3 py-1 rounded-full text-sm bg-[#2563eb] text-white">Year</button>
             </div>
           </div>
-           {hasReadings ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={chartData}>
-                <CartesianGrid stroke="#1f2937" strokeDasharray="4 4" />
-                <XAxis dataKey="time" tick={{ fontSize: 12, fill: '#9CA3AF' }} interval="preserveStartEnd" stroke="#374151" />
-                <YAxis tick={{ fontSize: 12, fill: '#9CA3AF' }} stroke="#374151" />
-                <Tooltip
-                  contentStyle={{ backgroundColor: '#111827', border: '1px solid #374151', borderRadius: '8px', color: '#fff' }}
-                  labelStyle={{ color: '#9CA3AF' }}
-                  itemStyle={{ color: '#fff' }}
-                />
-                {currentBlock && (
-                  <>
-                    <ReferenceLine y={parseFloat(currentBlock.avg_power_kw)} stroke="#60A5FA" strokeDasharray="6 6" label={{ value: 'Avg', position: 'right', fontSize: 12, fill: '#9CA3AF' }} />
-                    <ReferenceLine y={parseFloat(currentBlock.max_power_kw)} stroke="#F87171" strokeDasharray="6 6" label={{ value: 'Max', position: 'right', fontSize: 12, fill: '#9CA3AF' }} />
-                  </>
-                )}
-                {/* Multiple bar series to mimic example styling */}
-                <Bar dataKey="total_power_kw" name="Direct login" fill="#60A5FA" radius={[6, 6, 0, 0]} />
-                <Bar dataKey="aux_power_kw" name="Links to sites" fill="#8B5CF6" radius={[6, 6, 0, 0]} />
-                {/* Dotted line overlay to represent trend */}
-                <Line type="monotone" dataKey="trend_kw" stroke="#34D399" strokeDasharray="4 6" dot={false} strokeWidth={2} />
-              </BarChart>
-            </ResponsiveContainer>
+          {hasReadings ? (
+            <EnergyUsageChart
+              readings={readings}
+              blockInfo={blockInfo || undefined}
+              currentBlock={currentBlock || undefined}
+              dark={true}
+              defaultAccumulationOn={true}
+            />
           ) : (
             <div className="h-64 flex items-center justify-center bg-[#0b1220] rounded-lg border-2 border-dashed border-[#1f2937] text-center">
               <div>
@@ -483,7 +457,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
               </div>
             </div>
           )}
-         </section>
+        </section>
 
         {/* Last ten blocks */}
         {lastTenBlocks.length > 0 && (
