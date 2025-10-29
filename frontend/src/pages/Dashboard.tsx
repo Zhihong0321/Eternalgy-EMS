@@ -279,7 +279,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
             </Chip>
 
             {/* Realtime connection enabled: chart refreshes automatically on new readings */}
-            <Chip variant={isConnected ? 'filled' : 'outline'} color={isConnected ? 'success' : 'warning'}>
+            <Chip variant={isConnected ? 'filled' : 'outlined'} color={isConnected ? 'success' : 'warning'}>
               {isConnected ? `WS: connected${activeEndpoint ? ` @ ${new URL(activeEndpoint).host}` : ''}` : 'WS: not connected (polling fallback)'}
             </Chip>
             {!isConnected && connectionError && (
