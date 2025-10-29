@@ -31,24 +31,33 @@ async function getAllMeters() {
 }
 
 async function getMetersWithStats() {
+  // Optimized summary query:
+  // - Aggregate counts and min/max timestamps per meter
+  // - Use LATERAL join to fetch latest reading efficiently via index
   const result = await query(
     `SELECT
-       m.*, 
-       COALESCE(stats.reading_count, 0) AS reading_count,
-       stats.first_reading_timestamp,
-       stats.last_reading_timestamp,
-       stats.last_total_power_kw
+       m.*,
+       COALESCE(s.reading_count, 0) AS reading_count,
+       s.first_reading_timestamp,
+       s.last_reading_timestamp,
+       lr.total_power_kw AS last_total_power_kw
      FROM meters m
      LEFT JOIN (
        SELECT
          r.meter_id,
          COUNT(*)::BIGINT AS reading_count,
          MIN(r.timestamp) AS first_reading_timestamp,
-         MAX(r.timestamp) AS last_reading_timestamp,
-         (ARRAY_AGG(r.total_power_kw ORDER BY r.timestamp DESC))[1] AS last_total_power_kw
+         MAX(r.timestamp) AS last_reading_timestamp
        FROM energy_readings r
        GROUP BY r.meter_id
-     ) stats ON stats.meter_id = m.id
+     ) s ON s.meter_id = m.id
+     LEFT JOIN LATERAL (
+       SELECT r2.total_power_kw
+       FROM energy_readings r2
+       WHERE r2.meter_id = m.id
+       ORDER BY r2.timestamp DESC
+       LIMIT 1
+     ) lr ON TRUE
      ORDER BY m.created_at DESC`
   );
   return result.rows;

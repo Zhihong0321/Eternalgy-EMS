@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { getDashboardSnapshot, getMeters } from '../utils/api'
+import { getDashboardSnapshot, getMeters, getHealth } from '../utils/api'
 import type {
   DashboardSnapshot,
   EnergyReading,
@@ -42,6 +42,12 @@ export function useDashboardData(initialMeterId?: number): UseDashboardDataResul
     try {
       setLoading(true)
       setError(null)
+      // Warm up backend (e.g., serverless cold start) before fetching meters
+      try {
+        await getHealth()
+      } catch {
+        // Ignore health errors; proceed to fetch meters. The retry/timeout in fetchJson will help.
+      }
       const fetchedMeters = await getMeters()
       setMeters(fetchedMeters)
 
@@ -99,6 +105,10 @@ export function useDashboardData(initialMeterId?: number): UseDashboardDataResul
     setError(null)
 
     try {
+      // Warm up backend before snapshot request. Ignore errors but wait briefly.
+      try {
+        await getHealth()
+      } catch {}
       const snapshotResponse = await getDashboardSnapshot({ meterId: targetMeterId, limit: 120 })
       if (requestIdRef.current !== requestId) {
         return

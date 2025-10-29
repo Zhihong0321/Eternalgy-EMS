@@ -528,7 +528,39 @@ app.get('/api/meters', async (req, res) => {
 // Get meters with stored data statistics
 app.get('/api/meters/summary', async (req, res) => {
   try {
-    const meters = await getMetersWithStats();
+    // Simple in-memory cache to mitigate repeated heavy queries and cold starts
+    const now = Date.now();
+    if (!app.locals.summaryCache) {
+      app.locals.summaryCache = { data: null, expiresAt: 0, pending: null };
+    }
+
+    const cache = app.locals.summaryCache;
+
+    // Serve cached data if still fresh (5s TTL)
+    if (cache.data && cache.expiresAt > now) {
+      return res.json(cache.data);
+    }
+
+    // If a fetch is already in-flight, await it to avoid thundering herd
+    if (cache.pending) {
+      const data = await cache.pending;
+      return res.json(data);
+    }
+
+    // Fetch fresh data and populate cache
+    cache.pending = getMetersWithStats()
+      .then((meters) => {
+        cache.data = meters;
+        cache.expiresAt = Date.now() + 5000; // 5 seconds TTL
+        cache.pending = null;
+        return meters;
+      })
+      .catch((err) => {
+        cache.pending = null;
+        throw err;
+      });
+
+    const meters = await cache.pending;
     res.json(meters);
   } catch (error) {
     console.error('Failed to fetch meter summaries:', error);
@@ -696,23 +728,12 @@ app.delete('/api/simulators/data', async (req, res) => {
 /**
  * Start Server
  */
-async function ensureDbMigrations() {
-  try {
-    console.log('🔄 Ensuring DB migrations for reading_interval columns...');
-    await pool.query('ALTER TABLE meters ADD COLUMN IF NOT EXISTS reading_interval INTEGER DEFAULT 60;');
-    await pool.query('ALTER TABLE energy_readings ADD COLUMN IF NOT EXISTS reading_interval INTEGER DEFAULT 60;');
-    await pool.query('UPDATE meters SET reading_interval = 60 WHERE reading_interval IS NULL;');
-    await pool.query('UPDATE energy_readings SET reading_interval = 60 WHERE reading_interval IS NULL;');
-    console.log('✅ DB migrations ensured.');
-  } catch (err) {
-    console.error('❌ Failed to ensure DB migrations:', err);
-  }
-}
 async function startServer() {
   try {
-    await ensureDbMigrations();
+    // Migrations are handled by one-time script: npm run db:migrate
+    // Removing runtime migrations reduces cold-start time and avoids startup blocking.
   } catch (err) {
-    console.error('Failed to run DB migrations before startup:', err);
+    console.error('Startup initialization error:', err);
   }
   server.listen(PORT, () => {
     console.log(`

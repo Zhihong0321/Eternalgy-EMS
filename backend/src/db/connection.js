@@ -13,7 +13,8 @@ const pool = new Pool({
   } : false,
   max: 20, // Maximum number of clients in pool
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  // Increase connection timeout to better tolerate cold starts and network jitter
+  connectionTimeoutMillis: 10000,
 });
 
 // Test connection on startup

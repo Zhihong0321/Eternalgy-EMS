@@ -177,6 +177,13 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
           <p className="text-gray-600">View historical signals immediately, even when simulators are offline.</p>
         </header>
 
+        {/* Initial loading state to ensure Dashboard is in a loading mode while backend warms up */}
+        {loading && !snapshot && (
+          <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-md">
+            Preparing backend services… This first load may take a few seconds.
+          </div>
+        )}
+
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md">
             {error}

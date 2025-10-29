@@ -32,27 +32,75 @@ export function getApiBaseUrl() {
   return 'http://localhost:3000'
 }
 
+const DEFAULT_TIMEOUT_MS = 10000
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const baseUrl = getApiBaseUrl()
   const normalizedPath = path.startsWith('/') ? path : `/${path}`
-  const response = await fetch(`${baseUrl}${normalizedPath}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...init?.headers,
-    },
-    ...init,
-  })
 
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(text || `Request failed with status ${response.status}`)
+  const url = `${baseUrl}${normalizedPath}`
+
+  // Simple retry once for transient failures
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const controller = new AbortController()
+    const timeoutMs = DEFAULT_TIMEOUT_MS
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+
+    // If caller provided a signal, abort our controller when theirs aborts
+    if (init?.signal) {
+      const externalSignal = init.signal as AbortSignal
+      if (externalSignal.aborted) {
+        controller.abort()
+      } else {
+        const onAbort = () => controller.abort()
+        externalSignal.addEventListener('abort', onAbort, { once: true })
+      }
+    }
+
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...init?.headers,
+        },
+        ...init,
+        signal: controller.signal,
+      })
+
+      clearTimeout(timeoutId)
+
+      if (!response.ok) {
+        const text = await response.text()
+        const errorMessage = text || `Request failed with status ${response.status}`
+
+        // Retry only on server errors (5xx) in first attempt
+        if (attempt === 1 && response.status >= 500) {
+          await new Promise((r) => setTimeout(r, 300))
+          continue
+        }
+        throw new Error(errorMessage)
+      }
+
+      if (response.status === 204) {
+        return undefined as unknown as T
+      }
+
+      return response.json() as Promise<T>
+    } catch (error) {
+      clearTimeout(timeoutId)
+      const isAbort = error instanceof DOMException && error.name === 'AbortError'
+      const isNetworkError = error instanceof TypeError
+      if (attempt === 1 && (isAbort || isNetworkError)) {
+        // Wait briefly and retry once
+        await new Promise((r) => setTimeout(r, 300))
+        continue
+      }
+      throw error
+    }
   }
 
-  if (response.status === 204) {
-    return undefined as unknown as T
-  }
-
-  return response.json() as Promise<T>
+  // Should never reach here
+  throw new Error('Failed to fetch')
 }
 
 export async function getMeters(): Promise<Meter[]> {
@@ -61,6 +109,10 @@ export async function getMeters(): Promise<Meter[]> {
 
 export async function getMeterSummaries(): Promise<MeterSummary[]> {
   return fetchJson('/api/meters/summary')
+}
+
+export async function getHealth(): Promise<{ status: string; timestamp: string } | undefined> {
+  return fetchJson('/api/health')
 }
 
 interface SnapshotParams {

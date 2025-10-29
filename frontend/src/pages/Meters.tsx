@@ -6,6 +6,7 @@ import type { EnergyReading, MeterSummary } from '../types/dashboard'
 import {
   getMeterReadings,
   getMeterSummaries,
+  getHealth,
   updateMeterClientName
 } from '../utils/api'
 
@@ -77,6 +78,12 @@ export default function Meters({ selectedMeterId: externalSelectedMeterId = null
     try {
       setLoadingSummaries(true)
       setSummariesError(null)
+      // Warm up backend (helps mitigate cold starts on Railway)
+      try {
+        await getHealth()
+      } catch (_) {
+        // Ignore health check errors; proceed to fetch summaries
+      }
       const result = await getMeterSummaries()
       setSummaries(result)
 
