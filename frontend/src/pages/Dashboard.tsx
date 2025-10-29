@@ -119,7 +119,10 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
   }, [readings])
   const latestReading = chartData.length > 0 ? chartData[chartData.length - 1] : null
 
-  const targetKwh = 200
+  const targetKwhRaw = meter?.target_peak_kwh ?? null
+  const targetKwh = targetKwhRaw != null
+    ? (typeof targetKwhRaw === 'string' ? parseFloat(targetKwhRaw) : Number(targetKwhRaw))
+    : 200
   const { currentKwh, percentage } = useMemo(
     () => deriveTargetProgress(currentBlock, targetKwh),
     [currentBlock]
@@ -224,6 +227,21 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
               <Chip variant="tint" color="brand">
                 Reading Interval: {currentInterval}s
               </Chip>
+            )}
+
+            {meter && (
+              <>
+                {targetKwhRaw != null && (
+                  <Chip variant="tint" color="brand">
+                    Target: {targetKwh} kWh
+                  </Chip>
+                )}
+                {meter.whatsapp_number && (
+                  <Chip variant="tint" color="brand">
+                    WhatsApp: {meter.whatsapp_number}
+                  </Chip>
+                )}
+              </>
             )}
 
             <Chip variant="tint" color="brand">

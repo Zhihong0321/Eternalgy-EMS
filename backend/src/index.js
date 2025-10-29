@@ -20,7 +20,8 @@ const {
   getRecentReadings,
   getLastNBlocks,
   getMetersWithStats,
-  updateMeterName
+  updateMeterName,
+  updateMeterSettings
 } = require('./db/queries');
 const { calculateCurrentBlock, calculateBlockForTimestamp } = require('./services/blockAggregator');
 const { pool } = require('./db/connection');
@@ -50,6 +51,44 @@ const heartbeatIntervalMs = isValidHeartbeatInterval(WS_HEARTBEAT_INTERVAL_MS)
   : 25000;
 
 const HEARTBEAT_STATE_KEY = Symbol('wsHeartbeatState');
+
+// Track alerts sent per meter per block to avoid duplicates
+const sentBlockAlerts = new Set();
+
+// WhatsApp alert sender
+async function sendWhatsAppAlert(to, message) {
+  try {
+    const url = process.env.WHATSAPP_API_URL;
+    if (!url) {
+      console.warn('WHATSAPP_API_URL not configured. Skipping WhatsApp alert:', { to, message });
+      return { skipped: true, reason: 'no_url' };
+    }
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (process.env.WHATSAPP_API_TOKEN) {
+      headers['Authorization'] = `Bearer ${process.env.WHATSAPP_API_TOKEN}`;
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ to, message })
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      console.error('WhatsApp API responded with error:', res.status, text);
+      return { ok: false, status: res.status, body: text };
+    }
+
+    const json = await res.json().catch(() => ({}));
+    console.log('📣 WhatsApp alert sent to', to);
+    return { ok: true, status: res.status, body: json };
+  } catch (error) {
+    console.error('Failed to send WhatsApp alert:', error);
+    return { ok: false, error: error.message };
+  }
+}
 
 server.on('upgrade', (request, socket, head) => {
   try {
@@ -264,6 +303,26 @@ wss.on('connection', (ws, req) => {
           // Get or create meter for this simulator
           const meter = await getOrCreateMeter(deviceId, true, trimmedSimulatorName);
 
+          // Apply optional settings from registration
+          let targetPeakKwh;
+          if (typeof data.targetPeakKwh === 'number') {
+            targetPeakKwh = data.targetPeakKwh;
+          } else if (typeof data.targetPeakKwh === 'string') {
+            const parsed = parseFloat(data.targetPeakKwh);
+            if (Number.isFinite(parsed)) targetPeakKwh = parsed;
+          }
+          const whatsappNumber = typeof data.whatsappNumber === 'string' ? (data.whatsappNumber.trim() || null) : undefined;
+
+          if (typeof targetPeakKwh !== 'undefined' || typeof whatsappNumber !== 'undefined') {
+            const updated = await updateMeterSettings(meter.id, {
+              target_peak_kwh: typeof targetPeakKwh !== 'undefined' ? targetPeakKwh : undefined,
+              whatsapp_number: whatsappNumber
+            });
+            if (updated) {
+              Object.assign(meter, updated); // Reflect latest settings for this connection
+            }
+          }
+
           clients.simulators.set(ws, {
             deviceId,
             simulatorName,
@@ -455,6 +514,21 @@ async function handleMeterReading(data, ws) {
       dashboardsOnline: getDashboardStats().dashboardsOnline,
       sequence: registration?.sequence || null
     }));
+
+    // WhatsApp alert: when current block exceeds target_peak_kwh
+    const targetVal = meter?.target_peak_kwh != null ? parseFloat(meter.target_peak_kwh) : null;
+    const whatsappTo = meter?.whatsapp_number ? String(meter.whatsapp_number).trim() : '';
+    const currentKwh = currentBlock?.total_kwh != null ? parseFloat(currentBlock.total_kwh) : null;
+
+    if (targetVal && targetVal > 0 && whatsappTo && currentKwh != null && currentKwh >= targetVal) {
+      const alertKey = `${meter.id}:${blockStartIso}`;
+      if (!sentBlockAlerts.has(alertKey)) {
+        const msg = `Alert: ${meter.client_name || meter.device_id} reached ${currentKwh.toFixed(3)} kWh in current 30-min block (target ${targetVal} kWh). Block ${blockStartIso} - ${blockEndIso}.`;
+        sendWhatsAppAlert(whatsappTo, msg).then(() => {
+          sentBlockAlerts.add(alertKey);
+        });
+      }
+    }
   } catch (error) {
     console.error('Error handling simulator reading:', error);
 

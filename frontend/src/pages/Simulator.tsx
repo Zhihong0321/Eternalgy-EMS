@@ -62,6 +62,9 @@ export default function Simulator() {
   const [sentCount, setSentCount] = useState(0)
   const [simulationMode, setSimulationMode] = useState<'auto' | 'manual'>('auto')
   const [fastForwardSpeed, setFastForwardSpeed] = useState(30) // 1x to 60x (default 30x)
+  // Alert and target settings
+  const [targetPeakKwh, setTargetPeakKwh] = useState<number>(200)
+  const [whatsappNumber, setWhatsappNumber] = useState<string>('')
   // Simulated clock (history date)
   const [simStartDate, setSimStartDate] = useState<string>(() => new Date().toISOString().slice(0, 10))
   const [nextSimTimestamp, setNextSimTimestamp] = useState<number>(() => {
@@ -256,6 +259,8 @@ export default function Simulator() {
         deviceId,
         deviceName: deviceId,
         simulatorName,
+        targetPeakKwh,
+        whatsappNumber,
       })
 
       if (!didRegister) {
@@ -307,7 +312,9 @@ export default function Simulator() {
             type: 'simulator:register',
             deviceId,
             deviceName: deviceId,
-            simulatorName
+            simulatorName,
+            targetPeakKwh,
+            whatsappNumber,
           })
           if (!didRegister) {
             pushLog('Re-registration attempt failed: WebSocket not ready.')
@@ -601,6 +608,65 @@ export default function Simulator() {
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="SIM-XXXXXX"
             />
+          </div>
+
+          {/* Alert Settings */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Alert Settings
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Target KWH (per 30-min block)</label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={targetPeakKwh}
+                  onChange={(e) => setTargetPeakKwh(Math.max(1, Number(e.target.value || 0)))}
+                  disabled={isRunning}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                  placeholder="e.g. 200"
+                />
+                <p className="text-xs text-gray-500 mt-1">Backend will send one WhatsApp alert per block when usage exceeds this target.</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">WhatsApp Number (for alerts)</label>
+                <input
+                  type="tel"
+                  value={whatsappNumber}
+                  onChange={(e) => setWhatsappNumber(e.target.value)}
+                  disabled={isRunning}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                  placeholder="e.g. +1234567890"
+                />
+                <p className="text-xs text-gray-500 mt-1">Use international format (E.164), e.g., +12025550123.</p>
+              </div>
+            </div>
+            <div className="mt-3">
+              <Button
+                variant="border"
+                color="primary"
+                onClick={() => {
+                  const didRegister = send({
+                    type: 'simulator:register',
+                    deviceId,
+                    deviceName: deviceId,
+                    simulatorName,
+                    targetPeakKwh,
+                    whatsappNumber,
+                  })
+                  if (didRegister) {
+                    pushLog('Alert settings updated • re-register message sent')
+                  } else {
+                    pushLog('Failed to send alert settings update: WebSocket not connected')
+                  }
+                }}
+                disabled={!isConnected}
+              >
+                Apply Alert Settings
+              </Button>
+            </div>
           </div>
 
           {/* Simulation Mode Toggle */}

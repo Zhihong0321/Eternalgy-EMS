@@ -4,6 +4,8 @@ export interface Meter {
   client_name?: string | null
   is_simulator: boolean
   reading_interval?: number | null
+  target_peak_kwh?: number | string | null
+  whatsapp_number?: string | null
   created_at?: string
   updated_at?: string
   [key: string]: unknown

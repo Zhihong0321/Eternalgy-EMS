@@ -94,6 +94,40 @@ async function updateMeterName(meterId, clientName) {
   return result.rows[0] || null;
 }
 
+// Update meter alert/settings fields
+async function updateMeterSettings(meterId, { target_peak_kwh = undefined, whatsapp_number = undefined }) {
+  // Build dynamic SQL based on provided fields to avoid overwriting with NULLs
+  const fields = [];
+  const values = [];
+
+  if (typeof target_peak_kwh !== 'undefined') {
+    fields.push(`target_peak_kwh = $${fields.length + 1}`);
+    values.push(target_peak_kwh);
+  }
+
+  if (typeof whatsapp_number !== 'undefined') {
+    fields.push(`whatsapp_number = $${fields.length + 1}`);
+    values.push(whatsapp_number);
+  }
+
+  if (fields.length === 0) {
+    // Nothing to update
+    const meter = await getMeterById(meterId);
+    return meter;
+  }
+
+  const setClause = fields.join(', ');
+  const result = await query(
+    `UPDATE meters
+     SET ${setClause}, updated_at = NOW()
+     WHERE id = $${fields.length + 1}
+     RETURNING *`,
+    [...values, meterId]
+  );
+
+  return result.rows[0] || null;
+}
+
 // Update meter reading interval
 async function updateMeterReadingInterval(meterId, readingInterval) {
   const result = await query(
@@ -266,6 +300,7 @@ module.exports = {
   getMeterByDeviceId,
   getMetersWithStats,
   updateMeterName,
+  updateMeterSettings,
   updateMeterReadingInterval,
 
   // Readings
