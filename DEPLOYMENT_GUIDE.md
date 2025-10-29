@@ -2,6 +2,10 @@
 
 ## 🚀 Quick Deployment Steps
 
+> **🚨 Highlight: Always publish a fresh frontend bundle.**
+>
+> Run `npm run build` from the repository root (or let Railway execute the build phase) so the latest `frontend/dist` output is copied into `backend/public`. Skipping this step means the backend will keep serving the stale bundle that shipped with the repo and **none of the new dashboard work will be visible**.
+
 ### 1. Create Backend Service in Railway
 
 1. Go to Railway Dashboard: https://railway.com/project/b7689a85-7397-47fc-a821-0d15e09de530

@@ -1,18 +1,57 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useWebSocket } from '../hooks/useWebSocket'
 import Button from '../components/Button'
 import Badge from '../components/Badge'
 import Chip from '../components/Chip'
 import { generateSimulatorName } from '../utils/nameGenerator'
+import { resolveWebSocketConfig } from '../config'
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3000'
+const DEFAULT_WS_URL = 'ws://localhost:3000'
+
+type HandshakeState = 'idle' | 'pending' | 'success' | 'warning' | 'error'
+type AckStatus = 'accepted' | 'error'
+
+const HANDSHAKE_COLORS: Record<Exclude<HandshakeState, 'idle'>, 'brand' | 'success' | 'warning' | 'danger'> = {
+  pending: 'brand',
+  success: 'success',
+  warning: 'warning',
+  error: 'danger',
+}
+
+const HANDSHAKE_MESSAGES: Record<Exclude<HandshakeState, 'idle'>, string> = {
+  pending: 'Awaiting confirmation from dashboard...',
+  success: 'Dashboard confirmed and ready to receive data',
+  warning: 'No dashboard connected yet',
+  error: 'Handshake failed. Check dashboard status.',
+}
+
+const HANDSHAKE_REASON_LABELS: Record<string, string> = {
+  auto: 'automatic check',
+  manual: 'manual check',
+  register: 'registration',
+  'dashboard-joined': 'dashboard joined',
+  'dashboard-left': 'dashboard left',
+  'simulator-registered': 'registration broadcast',
+  initial: 'not yet run'
+}
 
 export default function Simulator() {
-  const { isConnected, send, lastMessage } = useWebSocket(WS_URL)
+  const { primaryUrl, fallbackUrls } = useMemo(() => {
+    const config = resolveWebSocketConfig()
+    const baseUrl = config.primaryUrl || DEFAULT_WS_URL
+    const fallbacks = config.fallbackUrls.filter((url) => url && url !== baseUrl)
+    return { primaryUrl: baseUrl, fallbackUrls: fallbacks }
+  }, [])
+
+  const { isConnected, send, lastMessage, connectionError, activeUrl } = useWebSocket(primaryUrl, {
+    fallbackUrls
+  })
 
   const [simulatorName, setSimulatorName] = useState(() => generateSimulatorName())
   const [isEditingName, setIsEditingName] = useState(false)
-  const [deviceId, setDeviceId] = useState('SIMULATOR-001')
+  // const [deviceId, setDeviceId] = useState('SIMULATOR-001')
+  const defaultDeviceName = `SIM-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2,5).toUpperCase()}`
+  const [deviceId, setDeviceId] = useState(defaultDeviceName)
   const [power, setPower] = useState(75)
   const [manualPower, setManualPower] = useState(75)
   const [frequency, setFrequency] = useState(60)
@@ -22,25 +61,323 @@ export default function Simulator() {
   const [tempInterval, setTempInterval] = useState(60) // temporary interval while dragging slider
   const [sentCount, setSentCount] = useState(0)
   const [simulationMode, setSimulationMode] = useState<'auto' | 'manual'>('auto')
-  const [fastForwardSpeed, setFastForwardSpeed] = useState(1) // 1x to 30x
+  const [fastForwardSpeed, setFastForwardSpeed] = useState(30) // 1x to 60x (default 30x)
+  // Alert and target settings
+  const [targetPeakKwh, setTargetPeakKwh] = useState<number>(200)
+  const [whatsappNumber, setWhatsappNumber] = useState<string>('')
+  // Simulated clock (history date)
+  const [simStartDate, setSimStartDate] = useState<string>(() => new Date().toISOString().slice(0, 10))
+  const [nextSimTimestamp, setNextSimTimestamp] = useState<number>(() => {
+    const d = new Date()
+    d.setHours(0, 0, 0, 0)
+    return d.getTime()
+  })
+  const [handshakeStatus, setHandshakeStatus] = useState<HandshakeState>('idle')
+  const [handshakeDetails, setHandshakeDetails] = useState('')
+  const [eventLog, setEventLog] = useState<string[]>([])
+  const [isRegistered, setIsRegistered] = useState(false)
+  const [attemptedCount, setAttemptedCount] = useState(0)
+  const [dashboardsOnline, setDashboardsOnline] = useState(0)
+  const [lastHandshakeAt, setLastHandshakeAt] = useState<number | null>(null)
+  const [lastHandshakeReason, setLastHandshakeReason] = useState<string>('initial')
+  const [lastAckAt, setLastAckAt] = useState<number | null>(null)
+  const [lastAckStatus, setLastAckStatus] = useState<AckStatus | null>(null)
+  const [lastAckMessage, setLastAckMessage] = useState<string | null>(null)
+  const [lastAckSequence, setLastAckSequence] = useState(0)
+
+  const pushLog = useCallback((entry: string) => {
+    setEventLog((prev) => {
+      const timestamp = new Date().toLocaleTimeString()
+      const next = [`[${timestamp}] ${entry}`, ...prev]
+      return next.slice(0, 50)
+    })
+  }, [])
+
+  const formatHandshakeReason = useCallback((reason?: string | null) => {
+    if (!reason || reason === 'initial') {
+      return HANDSHAKE_REASON_LABELS.initial
+    }
+
+    return HANDSHAKE_REASON_LABELS[reason] || reason.replace(/-/g, ' ')
+  }, [])
+
+  const formatTimestamp = useCallback((value: number | null) => {
+    if (!value) {
+      return '—'
+    }
+    return new Date(value).toLocaleTimeString()
+  }, [])
+
+  const pendingReadings = Math.max(attemptedCount - sentCount, 0)
+
+  const handshakeChipColor: 'brand' | 'success' | 'warning' | 'danger' =
+    handshakeStatus === 'idle'
+      ? 'brand'
+      : HANDSHAKE_COLORS[handshakeStatus as Exclude<HandshakeState, 'idle'>]
+
+  const handshakeSummary = handshakeStatus === 'idle'
+    ? 'Handshake not requested yet'
+    : handshakeDetails || HANDSHAKE_MESSAGES[handshakeStatus as Exclude<HandshakeState, 'idle'>]
+
+  const handshakeTimestampLabel = handshakeStatus === 'pending'
+    ? 'Awaiting handshake response'
+    : lastHandshakeAt
+      ? `${formatTimestamp(lastHandshakeAt)} • ${formatHandshakeReason(lastHandshakeReason)}`
+      : 'No handshake recorded yet'
+
+  const dashboardsChipColor: 'brand' | 'success' | 'warning' | 'danger' =
+    dashboardsOnline > 0 ? 'success' : 'warning'
+
+  const attemptChipColor: 'brand' | 'success' | 'warning' | 'danger' =
+    attemptedCount === 0 ? 'brand' : pendingReadings > 0 ? 'warning' : 'success'
+
+  const ackChipColor: 'brand' | 'success' | 'warning' | 'danger' =
+    lastAckStatus === 'error'
+      ? 'danger'
+      : lastAckStatus === 'accepted'
+        ? 'success'
+        : pendingReadings > 0
+          ? 'warning'
+          : 'brand'
+
+  const ackSummary = lastAckStatus
+    ? lastAckStatus === 'accepted'
+      ? `Last ack ${formatTimestamp(lastAckAt)}${lastAckSequence ? ` • reading #${lastAckSequence}` : ''}`
+      : `Ack failed${lastAckMessage ? ` • ${lastAckMessage}` : ''}`
+    : 'Awaiting first acknowledgement'
+
+  const ackPreview = lastAckStatus
+    ? lastAckStatus === 'accepted'
+      ? `${formatTimestamp(lastAckAt)}${lastAckSequence ? ` (#${lastAckSequence})` : ''}`
+      : `Failed${lastAckMessage ? ` - ${lastAckMessage}` : ''}`
+    : '—'
+
+  const handshakePreview = lastHandshakeAt
+    ? `${formatTimestamp(lastHandshakeAt)} (${formatHandshakeReason(lastHandshakeReason)})`
+    : '—'
+
+  const previousConnectionRef = useRef(isConnected)
+  const previousRunningRef = useRef(isRunning)
+
+  const activeEndpoint = activeUrl || primaryUrl
+  const previousEndpointRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (isConnected && !previousConnectionRef.current) {
+      pushLog(`Connected to ${activeEndpoint}`)
+    } else if (!isConnected && previousConnectionRef.current) {
+      pushLog('Connection lost. Waiting to reconnect...')
+      setHandshakeStatus('idle')
+      setHandshakeDetails('')
+      setIsRegistered(false)
+      setDashboardsOnline(0)
+      setLastHandshakeAt(null)
+      setLastHandshakeReason('initial')
+      setAttemptedCount(0)
+      setSentCount(0)
+      setLastAckAt(null)
+      setLastAckStatus(null)
+      setLastAckMessage(null)
+      setLastAckSequence(0)
+    }
+
+    previousConnectionRef.current = isConnected
+  }, [isConnected, pushLog, activeEndpoint])
+
+  useEffect(() => {
+    if (isConnected && activeEndpoint !== previousEndpointRef.current) {
+      if (previousEndpointRef.current) {
+        pushLog(`Switched WebSocket endpoint to ${activeEndpoint}`)
+      }
+      previousEndpointRef.current = activeEndpoint
+    }
+
+    if (!isConnected) {
+      previousEndpointRef.current = null
+    }
+  }, [isConnected, activeEndpoint, pushLog])
+
+  useEffect(() => {
+    if (connectionError) {
+      pushLog(connectionError)
+    }
+  }, [connectionError, pushLog])
+
+  useEffect(() => {
+    if (previousRunningRef.current === isRunning) {
+      previousRunningRef.current = isRunning
+      return
+    }
+
+    previousRunningRef.current = isRunning
+
+    if (isRunning) {
+      const speedLabel = fastForwardSpeed > 1 ? ` • ${fastForwardSpeed}x speed` : ''
+      pushLog(`Auto-send started (interval ${interval}s • ${simulationMode} mode${speedLabel})`)
+    } else {
+      pushLog('Auto-send paused')
+    }
+  }, [isRunning, interval, simulationMode, fastForwardSpeed, pushLog])
+
+  // Reset simulated clock whenever the start date changes
+  useEffect(() => {
+    try {
+      const d = new Date(`${simStartDate}T00:00:00`)
+      setNextSimTimestamp(d.getTime())
+      pushLog(`Simulated date set to ${d.toDateString()} • clock reset to 00:00`)
+    } catch (e) {
+      // Fallback: keep previous timestamp
+    }
+  }, [simStartDate, pushLog])
+
+  const requestHandshake = useCallback((source: 'auto' | 'manual' = 'manual') => {
+    const didSend = send({
+      type: 'simulator:handshake',
+      deviceId,
+      simulatorName,
+      source
+    })
+
+    if (didSend) {
+      setHandshakeStatus('pending')
+      setHandshakeDetails('Waiting for dashboard confirmation...')
+      setLastHandshakeReason(source)
+      setLastHandshakeAt(Date.now())
+      pushLog(`${source === 'manual' ? 'Manual' : 'Automatic'} handshake requested`)
+    } else {
+      setHandshakeStatus('error')
+      setHandshakeDetails('Unable to send handshake. Check connection logs.')
+      pushLog('Failed to send handshake request - WebSocket not connected')
+    }
+  }, [deviceId, simulatorName, send, pushLog])
 
   // Register as simulator when connected
   useEffect(() => {
     if (isConnected) {
-      send({
+      const didRegister = send({
         type: 'simulator:register',
         deviceId,
+        deviceName: deviceId,
         simulatorName,
+        targetPeakKwh,
+        whatsappNumber,
       })
-    }
-  }, [isConnected, deviceId, simulatorName, send])
 
-  // Handle acknowledgments
-  useEffect(() => {
-    if (lastMessage?.type === 'simulator:acknowledged') {
-      setSentCount((prev) => prev + 1)
+      if (!didRegister) {
+        pushLog('Registration message could not be sent. Waiting for reconnection...')
+      }
     }
-  }, [lastMessage])
+  }, [isConnected, deviceId, simulatorName, send, pushLog])
+
+  // Handle acknowledgments and handshake lifecycle
+  useEffect(() => {
+    if (!lastMessage) return
+
+    if (lastMessage.type === 'simulator:registered') {
+      pushLog(`Simulator registered as ${lastMessage.simulatorName} (${lastMessage.deviceName || lastMessage.deviceId})`)
+      setIsRegistered(true)
+      setSentCount(0)
+      setAttemptedCount(0)
+      setDashboardsOnline(0)
+      setLastAckAt(null)
+      setLastAckStatus(null)
+      setLastAckMessage(null)
+      setLastAckSequence(0)
+      setLastHandshakeAt(typeof lastMessage.timestamp === 'number' ? lastMessage.timestamp : Date.now())
+      setLastHandshakeReason('register')
+      requestHandshake('auto')
+      return
+    }
+
+    if (lastMessage.type === 'simulator:handshake-ack') {
+      const status: Exclude<HandshakeState, 'idle'> =
+        lastMessage.status === 'ok'
+          ? 'success'
+          : lastMessage.status === 'warning'
+            ? 'warning'
+            : 'error'
+
+      setHandshakeStatus(status)
+
+      const message = typeof lastMessage.message === 'string'
+        ? lastMessage.message
+        : HANDSHAKE_MESSAGES[status]
+
+      setHandshakeDetails(message)
+      if (status === 'error') {
+        setIsRegistered(false)
+        if (isConnected) {
+          pushLog('Server reports simulator is not registered. Attempting to re-register...')
+          const didRegister = send({
+            type: 'simulator:register',
+            deviceId,
+            deviceName: deviceId,
+            simulatorName,
+            targetPeakKwh,
+            whatsappNumber,
+          })
+          if (!didRegister) {
+            pushLog('Re-registration attempt failed: WebSocket not ready.')
+          }
+        }
+      } else {
+        setIsRegistered(true)
+      }
+      if (typeof lastMessage.dashboardsOnline === 'number') {
+        setDashboardsOnline(lastMessage.dashboardsOnline)
+      }
+      setLastHandshakeAt(typeof lastMessage.timestamp === 'number' ? lastMessage.timestamp : Date.now())
+      if (typeof lastMessage.reason === 'string') {
+        setLastHandshakeReason(lastMessage.reason)
+      }
+      const reasonText = formatHandshakeReason(lastMessage.reason)
+      pushLog(`Handshake (${reasonText}): ${message}`)
+
+      return
+    }
+
+    if (lastMessage.type === 'simulator:acknowledged') {
+      const ackStatus: AckStatus = lastMessage.status === 'error' ? 'error' : 'accepted'
+      if (typeof lastMessage.dashboardsOnline === 'number') {
+        setDashboardsOnline(lastMessage.dashboardsOnline)
+      }
+
+      const ackTimestamp = typeof lastMessage.timestamp === 'number' ? lastMessage.timestamp : Date.now()
+      setLastAckAt(ackTimestamp)
+      setLastAckStatus(ackStatus)
+      setLastAckMessage(typeof lastMessage.message === 'string' ? lastMessage.message : null)
+
+      if (ackStatus === 'accepted') {
+        setSentCount((prev) => prev + 1)
+        const sequence = typeof lastMessage.sequence === 'number'
+          ? lastMessage.sequence
+          : lastAckSequence + 1
+        setLastAckSequence(sequence)
+
+        const powerLabel = lastMessage.reading?.totalPowerKw !== undefined
+          ? `${lastMessage.reading.totalPowerKw} kW`
+          : 'power unknown'
+        pushLog(`Backend acknowledged reading #${sequence} (${powerLabel})`)
+      } else {
+        if (typeof lastMessage.sequence === 'number') {
+          setLastAckSequence(lastMessage.sequence)
+        }
+        const errorDetail = typeof lastMessage.message === 'string' ? lastMessage.message : 'Unknown error'
+        pushLog(`Backend rejected reading${lastMessage.sequence ? ` #${lastMessage.sequence}` : ''}: ${errorDetail}`)
+      }
+
+      return
+    }
+
+    if (lastMessage.type === 'error') {
+      setHandshakeStatus('error')
+      const message = typeof lastMessage.message === 'string'
+        ? lastMessage.message
+        : 'Server reported an unexpected error.'
+      setHandshakeDetails(message)
+      pushLog(`Server error: ${message}`)
+    }
+  }, [lastMessage, pushLog, requestHandshake, formatHandshakeReason, lastAckSequence, send, deviceId, simulatorName, isConnected])
 
   // Handle interval update with data wipe
   const handleUpdateInterval = async () => {
@@ -89,7 +426,7 @@ export default function Simulator() {
   useEffect(() => {
     if (!isRunning || !isConnected) return
 
-    const effectiveInterval = interval * 1000 / fastForwardSpeed
+    const effectiveInterval = (interval * 1000) / Math.max(1, fastForwardSpeed)
 
     const timer = window.setInterval(() => {
       const currentPower = simulationMode === 'manual' ? manualPower : power
@@ -98,38 +435,58 @@ export default function Simulator() {
       const variation = simulationMode === 'auto' ? (Math.random() - 0.5) * 2 * (volatility / 100) : 0
       const finalPower = currentPower * (1 + variation)
 
-      // When fast-forwarding, send multiple readings
-      const readingsToSend = fastForwardSpeed > 1 ? Math.ceil(fastForwardSpeed) : 1
+      // Send exactly ONE reading per effective tick, using the simulated clock.
+      const didSend = send({
+        type: 'simulator:reading',
+        deviceId,
+        deviceName: deviceId,
+        simulatorName,
+        totalPowerKw: parseFloat(finalPower.toFixed(2)),
+        timestamp: nextSimTimestamp,
+        frequency: parseFloat(frequency.toFixed(2)),
+        readingInterval: interval,
+      })
 
-      for (let i = 0; i < readingsToSend; i++) {
-        const timeOffset = i * (interval * 1000)
-        send({
-          type: 'simulator:reading',
-          deviceId,
-          simulatorName,
-          totalPowerKw: parseFloat(finalPower.toFixed(2)),
-          timestamp: Date.now() + timeOffset,
-          frequency: parseFloat(frequency.toFixed(2)),
-          readingInterval: interval,
-        })
+      if (didSend) {
+        setAttemptedCount((prev) => prev + 1)
+        setNextSimTimestamp((prev) => prev + interval * 1000)
+      } else {
+        pushLog('Reading dispatch skipped: WebSocket not connected. Simulator will retry automatically.')
       }
     }, effectiveInterval)
 
     return () => window.clearInterval(timer)
-  }, [isRunning, isConnected, power, manualPower, volatility, interval, deviceId, simulatorName, frequency, send, simulationMode, fastForwardSpeed])
+  }, [isRunning, isConnected, power, manualPower, volatility, interval, deviceId, simulatorName, frequency, send, simulationMode, fastForwardSpeed, pushLog, nextSimTimestamp])
 
   const handleSendOnce = () => {
     const variation = (Math.random() - 0.5) * 2 * (volatility / 100)
     const currentPower = power * (1 + variation)
 
-    send({
+    const didSend = send({
       type: 'simulator:reading',
       deviceId,
+      deviceName: deviceId,
+      simulatorName,
       totalPowerKw: parseFloat(currentPower.toFixed(2)),
-      timestamp: Date.now(),
+      timestamp: nextSimTimestamp,
       frequency: parseFloat(frequency.toFixed(2)),
       readingInterval: interval,
     })
+
+    if (didSend) {
+      let queuedSequence: string | null = null
+      setAttemptedCount((prev) => {
+        const next = prev + 1
+        queuedSequence = `#${next}`
+        return next
+      })
+      setNextSimTimestamp((prev) => prev + interval * 1000)
+      if (queuedSequence) {
+        pushLog(`Manual reading dispatched (${queuedSequence}) awaiting acknowledgement`)
+      }
+    } else {
+      pushLog('Manual reading could not be sent. Check WebSocket connection.')
+    }
   }
 
   return (
@@ -146,16 +503,49 @@ export default function Simulator() {
         </div>
 
         {/* Connection Status */}
-        <div className="mb-6 flex items-center gap-4">
+        <div className="mb-6 flex flex-wrap items-center gap-3">
           <Badge
             variant="lg"
             color={isConnected ? 'available' : 'offline'}
             text={isConnected ? 'Connected' : 'Disconnected'}
           />
 
+          <Chip variant="tint" color={handshakeChipColor}>
+            {`Handshake: ${handshakeSummary}`}
+          </Chip>
+
+          <Chip variant="tint" color={dashboardsChipColor}>
+            {dashboardsOnline === 1 ? '1 dashboard online' : `${dashboardsOnline} dashboards online`}
+          </Chip>
+
+          <Chip variant="tint" color="brand">
+            {`Endpoint: ${activeEndpoint}`}
+          </Chip>
+
+          <Chip variant="tint" color="brand">
+            {`Last handshake: ${handshakeTimestampLabel}`}
+          </Chip>
+
+          <Chip variant="tint" color={attemptChipColor}>
+            {`Dispatched ${attemptedCount} • Acked ${sentCount}${pendingReadings > 0 ? ` • ${pendingReadings} pending` : ''}`}
+          </Chip>
+
+          <Chip variant="tint" color={ackChipColor}>
+            {ackSummary}
+          </Chip>
+
+          <Button
+            variant="border"
+            color="primary"
+            onClick={() => requestHandshake('manual')}
+            disabled={!isConnected || handshakeStatus === 'pending'}
+          >
+            {handshakeStatus === 'pending' ? 'Checking...' : 'Run handshake'}
+          </Button>
+
           {isRunning && (
             <Chip variant="filled" color="success">
-              Running ({sentCount} readings sent)
+              {`Running (acked ${sentCount}/${attemptedCount})`}
             </Chip>
           )}
         </div>
@@ -205,10 +595,10 @@ export default function Simulator() {
             </div>
           </div>
 
-          {/* Device ID */}
+          {/* Device Name */}
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Device ID
+              Device Name
             </label>
             <input
               type="text"
@@ -216,8 +606,67 @@ export default function Simulator() {
               onChange={(e) => setDeviceId(e.target.value)}
               disabled={isRunning}
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="SIMULATOR-001"
+              placeholder="SIM-XXXXXX"
             />
+          </div>
+
+          {/* Alert Settings */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Alert Settings
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Target KWH (per 30-min block)</label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={targetPeakKwh}
+                  onChange={(e) => setTargetPeakKwh(Math.max(1, Number(e.target.value || 0)))}
+                  disabled={isRunning}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                  placeholder="e.g. 200"
+                />
+                <p className="text-xs text-gray-500 mt-1">Backend will send one WhatsApp alert per block when usage exceeds this target.</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">WhatsApp Number (for alerts)</label>
+                <input
+                  type="tel"
+                  value={whatsappNumber}
+                  onChange={(e) => setWhatsappNumber(e.target.value)}
+                  disabled={isRunning}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                  placeholder="e.g. +1234567890"
+                />
+                <p className="text-xs text-gray-500 mt-1">Use international format (E.164), e.g., +12025550123.</p>
+              </div>
+            </div>
+            <div className="mt-3">
+              <Button
+                variant="border"
+                color="primary"
+                onClick={() => {
+                  const didRegister = send({
+                    type: 'simulator:register',
+                    deviceId,
+                    deviceName: deviceId,
+                    simulatorName,
+                    targetPeakKwh,
+                    whatsappNumber,
+                  })
+                  if (didRegister) {
+                    pushLog('Alert settings updated • re-register message sent')
+                  } else {
+                    pushLog('Failed to send alert settings update: WebSocket not connected')
+                  }
+                }}
+                disabled={!isConnected}
+              >
+                Apply Alert Settings
+              </Button>
+            </div>
           </div>
 
           {/* Simulation Mode Toggle */}
@@ -393,6 +842,38 @@ export default function Simulator() {
             )}
           </div>
 
+          {/* Simulation Start Date (History) */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Simulation Start Date
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={simStartDate}
+                onChange={(e) => setSimStartDate(e.target.value)}
+                disabled={isRunning}
+                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+              />
+              <button
+                onClick={() => {
+                  const d = new Date(`${simStartDate}T00:00:00`)
+                  setNextSimTimestamp(d.getTime())
+                  pushLog('Simulated clock reset to start of selected date')
+                }}
+                className="px-3 py-2 border border-gray-300 rounded-md hover:bg-gray-50 text-sm"
+              >
+                Reset Clock
+              </button>
+            </div>
+            <p className="text-xs text-gray-600 mt-2">
+              Readings are time-stamped using the simulated clock starting at 00:00 on the selected date.
+            </p>
+            <p className="text-xs text-gray-600 mt-1">
+              Next simulated timestamp: {new Date(nextSimTimestamp).toLocaleString()}
+            </p>
+          </div>
+
           {/* Fast Forward Speed */}
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -401,7 +882,7 @@ export default function Simulator() {
             <input
               type="range"
               min="1"
-              max="30"
+              max="60"
               step="1"
               value={fastForwardSpeed}
               onChange={(e) => setFastForwardSpeed(Number(e.target.value))}
@@ -409,12 +890,11 @@ export default function Simulator() {
             />
             <div className="flex justify-between text-xs text-gray-500 mt-1">
               <span>1x (Real-time)</span>
-              <span>15x</span>
-              <span>30x (Max)</span>
+              <span>30x (Default)</span>
+              <span>60x (Max)</span>
             </div>
             <p className="text-xs text-gray-600 mt-2">
-              ⚡ Fast forward generates future data at {fastForwardSpeed}x speed
-              {fastForwardSpeed > 1 && ` (${Math.ceil(fastForwardSpeed)} readings per interval)`}
+              ⚡ Fast forward runs the simulated clock at {fastForwardSpeed}x. For a {interval}s interval, one reading is sent every {(interval / Math.max(1, fastForwardSpeed)).toFixed(2)}s, stamped with the simulated time.
             </p>
           </div>
 
@@ -441,7 +921,15 @@ export default function Simulator() {
             <Button
               variant="plain"
               color="warning"
-              onClick={() => setSentCount(0)}
+              onClick={() => {
+                setSentCount(0)
+                setAttemptedCount(0)
+                setLastAckSequence(0)
+                setLastAckAt(null)
+                setLastAckStatus(null)
+                setLastAckMessage(null)
+                pushLog('Counters reset manually')
+              }}
             >
               Reset Counter
             </Button>
@@ -451,9 +939,9 @@ export default function Simulator() {
         {/* Current Reading Preview */}
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-6">
           <h3 className="text-lg font-semibold mb-3">Current Reading Preview</h3>
-          <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
             <div>
-              <p className="text-gray-600">Device ID:</p>
+              <p className="text-gray-600">Device Name:</p>
               <p className="font-mono font-semibold">{deviceId}</p>
             </div>
             <div>
@@ -467,10 +955,58 @@ export default function Simulator() {
               <p className="font-semibold">{frequency} Hz</p>
             </div>
             <div>
-              <p className="text-gray-600">Readings Sent:</p>
+              <p className="text-gray-600">Dispatch Attempts:</p>
+              <p className="font-semibold">{attemptedCount}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Acknowledged:</p>
               <p className="font-semibold">{sentCount}</p>
             </div>
+            <div>
+              <p className="text-gray-600">Pending Ack:</p>
+              <p className="font-semibold">{pendingReadings}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Last Ack:</p>
+              <p className="font-semibold">{ackPreview}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Last Handshake:</p>
+              <p className="font-semibold">{handshakePreview}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Dashboards Online:</p>
+              <p className="font-semibold">{dashboardsOnline}</p>
+            </div>
           </div>
+        </div>
+
+        {/* Connection Log */}
+        <div className="mt-6 bg-white shadow rounded-lg p-6">
+          <h3 className="text-lg font-semibold mb-3">Connection Log</h3>
+          <div className="h-48 overflow-y-auto bg-gray-50 border border-gray-200 rounded-md p-3 font-mono text-xs text-gray-700 space-y-1">
+            {eventLog.length > 0 ? (
+              eventLog.map((entry, index) => (
+                <div key={`${index}-${entry}`}>{entry}</div>
+              ))
+            ) : (
+              <p className="text-gray-500">Connection events will appear here.</p>
+            )}
+          </div>
+          {connectionError && (
+            <p className="text-sm text-red-600 mt-3">{connectionError}</p>
+          )}
+          {!isRegistered && isConnected && (
+            <p className="text-sm text-blue-600 mt-3">Awaiting simulator registration acknowledgement...</p>
+          )}
+          {pendingReadings > 0 && (
+            <p className="text-sm text-amber-600 mt-3">
+              {pendingReadings} reading{pendingReadings === 1 ? '' : 's'} awaiting acknowledgement.
+            </p>
+          )}
+          {lastAckStatus === 'error' && lastAckMessage && (
+            <p className="text-sm text-red-600 mt-1">Last acknowledgement error: {lastAckMessage}</p>
+          )}
         </div>
 
         {/* Instructions */}

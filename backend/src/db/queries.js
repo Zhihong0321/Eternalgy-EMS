@@ -10,13 +10,16 @@ const { query } = require('./connection');
  */
 
 // Get or create meter by device ID
-async function getOrCreateMeter(deviceId, isSimulator = false) {
+async function getOrCreateMeter(deviceId, isSimulator = false, clientName = null) {
   const result = await query(
-    `INSERT INTO meters (device_id, is_simulator)
-     VALUES ($1, $2)
-     ON CONFLICT (device_id) DO UPDATE SET updated_at = NOW()
+    `INSERT INTO meters (device_id, is_simulator, client_name)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (device_id) DO UPDATE SET
+       updated_at = NOW(),
+       is_simulator = EXCLUDED.is_simulator,
+       client_name = COALESCE(EXCLUDED.client_name, meters.client_name)
      RETURNING *`,
-    [deviceId, isSimulator]
+    [deviceId, isSimulator, clientName]
   );
   return result.rows[0];
 }
@@ -25,6 +28,104 @@ async function getOrCreateMeter(deviceId, isSimulator = false) {
 async function getAllMeters() {
   const result = await query('SELECT * FROM meters ORDER BY created_at DESC');
   return result.rows;
+}
+
+async function getMetersWithStats() {
+  // Optimized summary query:
+  // - Aggregate counts and min/max timestamps per meter
+  // - Use LATERAL join to fetch latest reading efficiently via index
+  const result = await query(
+    `SELECT
+       m.*,
+       COALESCE(s.reading_count, 0) AS reading_count,
+       s.first_reading_timestamp,
+       s.last_reading_timestamp,
+       lr.total_power_kw AS last_total_power_kw
+     FROM meters m
+     LEFT JOIN (
+       SELECT
+         r.meter_id,
+         COUNT(*)::BIGINT AS reading_count,
+         MIN(r.timestamp) AS first_reading_timestamp,
+         MAX(r.timestamp) AS last_reading_timestamp
+       FROM energy_readings r
+       GROUP BY r.meter_id
+     ) s ON s.meter_id = m.id
+     LEFT JOIN LATERAL (
+       SELECT r2.total_power_kw
+       FROM energy_readings r2
+       WHERE r2.meter_id = m.id
+       ORDER BY r2.timestamp DESC
+       LIMIT 1
+     ) lr ON TRUE
+     ORDER BY m.created_at DESC`
+  );
+  return result.rows;
+}
+
+// Get meter by ID
+async function getMeterById(meterId) {
+  const result = await query(
+    'SELECT * FROM meters WHERE id = $1 LIMIT 1',
+    [meterId]
+  );
+  return result.rows[0] || null;
+}
+
+// Get meter by device ID
+async function getMeterByDeviceId(deviceId) {
+  const result = await query(
+    'SELECT * FROM meters WHERE device_id = $1 LIMIT 1',
+    [deviceId]
+  );
+  return result.rows[0] || null;
+}
+
+async function updateMeterName(meterId, clientName) {
+  const result = await query(
+    `UPDATE meters
+     SET client_name = $1,
+         updated_at = NOW()
+     WHERE id = $2
+     RETURNING *`,
+    [clientName, meterId]
+  );
+
+  return result.rows[0] || null;
+}
+
+// Update meter alert/settings fields
+async function updateMeterSettings(meterId, { target_peak_kwh = undefined, whatsapp_number = undefined }) {
+  // Build dynamic SQL based on provided fields to avoid overwriting with NULLs
+  const fields = [];
+  const values = [];
+
+  if (typeof target_peak_kwh !== 'undefined') {
+    fields.push(`target_peak_kwh = $${fields.length + 1}`);
+    values.push(target_peak_kwh);
+  }
+
+  if (typeof whatsapp_number !== 'undefined') {
+    fields.push(`whatsapp_number = $${fields.length + 1}`);
+    values.push(whatsapp_number);
+  }
+
+  if (fields.length === 0) {
+    // Nothing to update
+    const meter = await getMeterById(meterId);
+    return meter;
+  }
+
+  const setClause = fields.join(', ');
+  const result = await query(
+    `UPDATE meters
+     SET ${setClause}, updated_at = NOW()
+     WHERE id = $${fields.length + 1}
+     RETURNING *`,
+    [...values, meterId]
+  );
+
+  return result.rows[0] || null;
 }
 
 // Update meter reading interval
@@ -75,6 +176,20 @@ async function getLatestReading(meterId) {
     [meterId]
   );
   return result.rows[0];
+}
+
+// Get most recent readings for a meter
+async function getRecentReadings(meterId, limit = 30) {
+  const result = await query(
+    `SELECT * FROM energy_readings
+     WHERE meter_id = $1
+     ORDER BY timestamp DESC
+     LIMIT $2`,
+    [meterId, limit]
+  );
+
+  // Return in chronological order for charting
+  return result.rows.reverse();
 }
 
 /**
@@ -181,12 +296,18 @@ module.exports = {
   // Meters
   getOrCreateMeter,
   getAllMeters,
+  getMeterById,
+  getMeterByDeviceId,
+  getMetersWithStats,
+  updateMeterName,
+  updateMeterSettings,
   updateMeterReadingInterval,
 
   // Readings
   insertReading,
   getReadingsByTimeRange,
   getLatestReading,
+  getRecentReadings,
 
   // Blocks
   upsertBlock,

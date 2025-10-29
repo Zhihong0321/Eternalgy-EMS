@@ -1,0 +1,20 @@
+[variables]
+NODE_ENV = "production"
+
+[phases.setup]
+nixPkgs = ["nodejs_18"]
+
+[phases.install]
+cmds = [
+  "npm --prefix backend ci",
+  "npm --prefix frontend ci --include=dev"
+]
+
+[phases.build]
+cmds = [
+  "npm --prefix frontend run build",
+  "node scripts/sync-frontend.js"
+]
+
+[start]
+cmd = "cd backend && npm start"

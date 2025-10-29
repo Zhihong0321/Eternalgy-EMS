@@ -4,8 +4,10 @@
   "description": "Energy Management System - Monorepo",
   "private": true,
   "scripts": {
-    "postinstall": "cd backend && npm install",
+    "postinstall": "npm --prefix backend install && npm --prefix frontend install --include=dev",
     "start": "cd backend && npm start",
-    "dev": "cd backend && npm run dev"
+    "dev": "cd backend && npm run dev",
+    "build": "npm --prefix frontend run build && node scripts/sync-frontend.js",
+    "sync:frontend": "node scripts/sync-frontend.js"
   }
 }
