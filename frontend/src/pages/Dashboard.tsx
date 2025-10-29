@@ -71,7 +71,6 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
 
   const meter = snapshot?.meter ?? null
   const meterDisplayName = meter?.client_name?.trim() ? meter.client_name : meter?.device_id ?? 'Unknown meter'
-  const blockInfo = snapshot?.blockInfo ?? null
   const currentBlock = snapshot?.currentBlock ?? null
   const lastTenBlocks = snapshot?.lastTenBlocks ?? []
   const dashboardsOnline = snapshot?.dashboardStats?.dashboardsOnline ?? 0
