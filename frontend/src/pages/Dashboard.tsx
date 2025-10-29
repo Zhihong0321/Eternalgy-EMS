@@ -110,7 +110,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
 
   // Realtime auto-refresh: use websocket updates to trigger snapshot refresh.
   const wsConfig = resolveWebSocketConfig()
-  const { isConnected } = useDashboardRealtime(wsConfig.primaryUrl, {
+  const { isConnected, activeEndpoint, connectionError } = useDashboardRealtime(wsConfig.primaryUrl, {
     fallbackUrls: wsConfig.fallbackUrls,
     requestSnapshot: (options) => {
       // Delegate to useDashboardData refresh; it already throttles and uses selected meter
@@ -279,6 +279,12 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
             </Chip>
 
             {/* Realtime connection enabled: chart refreshes automatically on new readings */}
+            <Chip variant={isConnected ? 'filled' : 'outline'} color={isConnected ? 'success' : 'warning'}>
+              {isConnected ? `WS: connected${activeEndpoint ? ` @ ${new URL(activeEndpoint).host}` : ''}` : 'WS: not connected (polling fallback)'}
+            </Chip>
+            {!isConnected && connectionError && (
+              <span className="text-xs text-gray-500" title={connectionError}>!</span>
+            )}
           </div>
           {/* Connected simulators list retained for visibility, but does not affect charts */}
           <div className="grid md:grid-cols-2 gap-6">
@@ -325,7 +331,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
 
             <div className="flex-1">
               <p className="text-sm text-gray-500">
-                Charts refresh from stored readings on every snapshot. Realtime (websocket) is no longer used for chart updates.
+                Charts refresh from stored readings. When WebSocket is connected, snapshots are triggered automatically on new readings; otherwise a 60s polling fallback is used.
               </p>
               {latestReading && (
                 <p className="text-sm text-gray-600 mt-1">

@@ -8,6 +8,7 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const cors = require('cors');
+const path = require('path');
 
 const {
   getOrCreateMeter,
@@ -124,7 +125,21 @@ app.use(cors({
   origin: process.env.ALLOWED_ORIGINS?.split(',') || '*'
 }));
 app.use(express.json());
-app.use(express.static(require('path').join(__dirname, '../public'))); // Serve static files for simulator/dashboard
+// Serve static files for simulator/dashboard with safer cache headers
+// - index.html: no-store to ensure users always fetch latest HTML shell
+// - hashed assets: long cache with immutable
+app.use(express.static(path.join(__dirname, '../public'), {
+  setHeaders(res, filePath) {
+    const lower = filePath.toLowerCase();
+    if (lower.endsWith('index.html')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    } else if (/(\.js|\.css|\.png|\.jpg|\.jpeg|\.gif|\.svg|\.woff2?|\.ttf)$/i.test(lower)) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  }
+}));
 
 // Mount debug API routes
 // ⚠️ WARNING: These should be protected or disabled in production!
