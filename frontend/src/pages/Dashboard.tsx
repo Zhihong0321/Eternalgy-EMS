@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Badge from '../components/Badge'
 import Chip from '../components/Chip'
 import EnergyUsageChart from '../components/EnergyUsageChart'
+import pkg from '../../package.json'
 import { useDashboardData } from '../hooks/useDashboardData'
 import type { BlockRecord, EnergyReading } from '../types/dashboard'
 import { wipeSimulatorData, getMeterReadingsByRange } from '../utils/api'
@@ -183,9 +184,19 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
   return (
     <div className="px-4 py-6">
       <div className="max-w-6xl mx-auto space-y-6">
-        <header>
-          <h2 className="text-3xl font-bold text-gray-900 mb-2">Stored Energy Insights</h2>
-          <p className="text-gray-600">View historical signals immediately, even when simulators are offline.</p>
+        <header className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-3xl font-bold text-gray-900 mb-2">Stored Energy Insights</h2>
+            <p className="text-gray-600">View historical signals immediately, even when simulators are offline.</p>
+          </div>
+          <div className="mt-1">
+            <span
+              title={`Frontend version and mode`}
+              className="inline-flex items-center rounded-md bg-gray-100 px-2 py-1 text-xs font-medium text-gray-700 border border-gray-200"
+            >
+              Build v{pkg.version} • {import.meta.env.MODE}
+            </span>
+          </div>
         </header>
 
         {/* Initial loading state to ensure Dashboard is in a loading mode while backend warms up */}
