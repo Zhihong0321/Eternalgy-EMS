@@ -1,15 +1,36 @@
+#############################################
+# Multi-stage Dockerfile for EMS Backend
+# Builds the frontend and copies dist into backend/public.
+#
+# IMPORTANT: This Dockerfile assumes the Docker build CONTEXT is the REPO ROOT
+# so it can access both `frontend/` and `backend/` directories.
+# In Railway, if you switch the backend service to DOCKERFILE builder, set
+# the service Root Directory to the repo root and point to backend/Dockerfile.
+#############################################
+
+# Stage 1: Build Frontend
+FROM node:18-alpine AS frontend-builder
+WORKDIR /app/frontend
+# Copy only package files first for better caching
+COPY frontend/package*.json ./
+RUN npm ci
+# Copy source and build
+COPY frontend .
+RUN npm run build
+
+# Stage 2: Backend runtime
 FROM node:18-alpine
+WORKDIR /app/backend
 
-WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-
-# Install dependencies
+# Copy backend package files and install production deps
+COPY backend/package*.json ./
 RUN npm ci --only=production
 
-# Copy application code
-COPY . .
+# Copy backend source
+COPY backend .
+
+# Copy built frontend assets into backend/public
+COPY --from=frontend-builder /app/frontend/dist ./public
 
 # Expose port (Railway will inject PORT env var)
 EXPOSE 3000
