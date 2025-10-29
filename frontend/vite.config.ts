@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react'
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  // On GitHub Pages deployments, assets must be served from /<repo-name>/
+  // The workflow will set BASE_PATH to '/<repo>/' so URLs resolve correctly.
+  base: process.env.BASE_PATH || '/',
   plugins: [react()],
   server: {
     port: 5173,

@@ -4,6 +4,8 @@ import Chip from '../components/Chip'
 import EnergyUsageChart from '../components/EnergyUsageChart'
 import pkg from '../../package.json'
 import { useDashboardData } from '../hooks/useDashboardData'
+import { useDashboardRealtime } from '../hooks/useDashboardRealtime'
+import { resolveWebSocketConfig } from '../config'
 import type { BlockRecord, EnergyReading } from '../types/dashboard'
 import { wipeSimulatorData, getMeterReadingsByRange } from '../utils/api'
 
@@ -59,6 +61,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
     snapshot,
     readings,
     connectedSimulators,
+    updateConnectedSimulators,
     loading,
     error,
     refresh,
@@ -105,14 +108,32 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
     }
   }, [lastTenBlocks])
 
-  // Poll for new stored data periodically without websockets
+  // Realtime auto-refresh: use websocket updates to trigger snapshot refresh.
+  const wsConfig = resolveWebSocketConfig()
+  const { isConnected } = useDashboardRealtime(wsConfig.primaryUrl, {
+    fallbackUrls: wsConfig.fallbackUrls,
+    requestSnapshot: (options) => {
+      // Delegate to useDashboardData refresh; it already throttles and uses selected meter
+      refresh({ ...(options || {}), silent: true })
+    },
+    onSimulatorsUpdate: updateConnectedSimulators
+  })
+
+  // Polling fallback: when websocket is NOT connected, poll every 60s.
+  // When connected, rely on realtime debounced refreshes and skip polling.
   useEffect(() => {
-    const interval = setInterval(() => {
-      // Silent refresh; useDashboardData has concurrency and throttle guards
-      refresh({ silent: true })
-    }, 60_000) // every 60s
-    return () => clearInterval(interval)
-  }, [refresh])
+    let intervalId: number | null = null
+    if (!isConnected) {
+      intervalId = window.setInterval(() => {
+        refresh({ silent: true })
+      }, 60_000)
+    }
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId)
+      }
+    }
+  }, [isConnected, refresh])
   const lastUpdatedLabel = lastUpdated
     ? lastUpdated.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     : 'Never'
@@ -257,7 +278,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
               Snapshot refreshed: {lastUpdatedLabel}
             </Chip>
 
-            {/* Realtime connection removed from charting; errors no longer displayed here */}
+            {/* Realtime connection enabled: chart refreshes automatically on new readings */}
           </div>
           {/* Connected simulators list retained for visibility, but does not affect charts */}
           <div className="grid md:grid-cols-2 gap-6">

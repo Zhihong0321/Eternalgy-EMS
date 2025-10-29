@@ -77,6 +77,28 @@ https://your-frontend-url.railway.app
 
 **Expected:** EMS Dashboard loads with navigation tabs
 
+—
+
+## Important: Two UI Serving Paths
+
+This project can serve the Dashboard UI from TWO different places. Knowing which one you are testing prevents "why didn't it update?" moments:
+
+1) Frontend Service (recommended for production)
+- Hosted by Railway as its own service
+- Built via `frontend/Dockerfile` and served by Nginx
+- URL looks like: `https://ems-frontend-<env>.up.railway.app`
+- When you push to GitHub, Railway rebuilds this service and serves the latest assets automatically
+
+2) Backend Static UI (useful for quick testing or single-domain)
+- Backend Express serves files from `backend/public`
+- Those files must be kept up to date by copying the latest `frontend/dist` build into `backend/public`
+- URL looks like: `https://eternalgy-ems-<env>.up.railway.app`
+- To automate this, the backend service must run a Build Command that builds the frontend and syncs it before starting the server
+
+If you are testing the backend URL, make sure the backend service rebuilds the frontend and syncs assets on each deploy (see "Backend Static UI" notes below).
+
+—
+
 ---
 
 ### Test 2: WebSocket Connection
@@ -133,6 +155,35 @@ If you see "WebSocket disconnected", wait 10 seconds for auto-reconnect.
 
 ---
 
+### Issue: "Frontend didn’t update on backend domain"
+
+Symptoms:
+- You pushed changes, but `https://eternalgy-ems-<env>.up.railway.app` still shows the old UI
+
+Cause:
+- You are viewing the backend-hosted static UI (`backend/public`). It only updates when the backend deploy runs the frontend build and sync step.
+
+Fix:
+1. In Railway, open your Backend service.
+2. Set Build Command to:
+   ```bash
+   npm --prefix backend run build
+   ```
+   This runs the script defined in `backend/package.json`, which:
+   - installs frontend deps (`npm ci`),
+   - builds the Vite assets,
+   - copies `frontend/dist` into `backend/public` via `scripts/sync-frontend.js`.
+3. Set Start Command to:
+   ```bash
+   npm --prefix backend run start
+   ```
+4. Redeploy the Backend service, then hard-refresh the browser (Ctrl/Cmd+Shift+R) or open in Incognito.
+
+Verification:
+- On the Dashboard page, look for the build marker section titled "TEST NEW CHART". If you see it, the backend is serving the latest build.
+
+—
+
 ### Issue: WebSocket won't connect
 
 **Possible causes:**
@@ -171,6 +222,8 @@ Railway Project: Eternalgy-EMS
 │   └── URL: eternalgy-ems-production.up.railway.app
 └── Frontend (Nginx)               🆕 Deploying
     └── URL: ems-frontend-production.up.railway.app
+
+If you plan to use the Backend domain for the UI, enable the Backend Build Command (see Troubleshooting above) so it always serves the latest assets.
 ```
 
 ---
@@ -189,6 +242,7 @@ After frontend deploys successfully:
 - [ ] Progress bar works
 - [ ] Peak hour badge shows correctly
 - [ ] Block statistics calculate correctly
+- [ ] If testing backend domain, "TEST NEW CHART" section is visible (build marker)
 
 ---
 
