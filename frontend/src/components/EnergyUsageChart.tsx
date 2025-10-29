@@ -19,6 +19,12 @@ type EnergyUsageChartProps = {
   currentBlock?: BlockRecord | null
   dark?: boolean
   defaultAccumulationOn?: boolean
+  // When true and a block window is provided, render fixed-width bars by preallocating
+  // minute slots across the block (e.g., a 30-minute window). This reserves space for
+  // future minutes so bar width stays consistent.
+  fixedWidthPerMinute?: boolean
+  // Pixel width for each bar when fixed width mode is enabled.
+  barPixelWidth?: number
 }
 
 type ChartPoint = {
@@ -38,7 +44,9 @@ export default function EnergyUsageChart({
   blockInfo,
   currentBlock,
   dark = true,
-  defaultAccumulationOn = true
+  defaultAccumulationOn = true,
+  fixedWidthPerMinute = true,
+  barPixelWidth = 10
 }: EnergyUsageChartProps) {
   const [showAccumulation, setShowAccumulation] = useState<boolean>(defaultAccumulationOn)
 
@@ -88,8 +96,50 @@ export default function EnergyUsageChart({
       })
     }
 
+    // If a block window is provided and fixed width mode is enabled, preallocate minute slots
+    // across the window to keep bar width constant (reserve space for future minutes).
+    if (
+      fixedWidthPerMinute &&
+      windowStart !== null &&
+      windowEnd !== null &&
+      Number.isFinite(windowStart) &&
+      Number.isFinite(windowEnd) &&
+      windowEnd > windowStart
+    ) {
+      const slotMs = 60_000 // 1 minute slots
+      const slots: ChartPoint[] = []
+      let j = 0
+      let lastCumulative = 0
+      const n = points.length
+
+      for (let t = windowStart; t <= windowEnd; t += slotMs) {
+        // Advance through points up to current slot time
+        let kwForThisMinute: number | null = null
+        while (j < n && points[j].timestamp <= t) {
+          lastCumulative = points[j].cumulative_kwh
+          // Use the latest reading that falls within this minute
+          const minuteTs = Math.floor(points[j].timestamp / slotMs) * slotMs
+          if (minuteTs === Math.floor(t / slotMs) * slotMs) {
+            kwForThisMinute = points[j].total_power_kw
+          }
+          j++
+        }
+
+        const label = new Date(t).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+        slots.push({
+          timestamp: t,
+          timeLabel: label,
+          total_power_kw: kwForThisMinute ?? 0,
+          kwh_increment: 0, // show per-minute increment as 0 to avoid misleading spikes
+          cumulative_kwh: lastCumulative
+        })
+      }
+
+      return slots
+    }
+
     return points
-  }, [readings, windowStart, windowEnd])
+  }, [readings, windowStart, windowEnd, fixedWidthPerMinute])
 
   const isPeak = blockInfo?.isPeakHour || false
 
@@ -119,7 +169,13 @@ export default function EnergyUsageChart({
       <ResponsiveContainer width="100%" height={300}>
         <ComposedChart data={data} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
           <CartesianGrid stroke={colors.grid} strokeDasharray="4 4" />
-          <XAxis dataKey="timeLabel" tick={{ fontSize: 12, fill: colors.tick }} stroke={colors.axis} />
+          {/* Category axis by minute label; interval reduces clutter. */}
+          <XAxis
+            dataKey="timeLabel"
+            tick={{ fontSize: 12, fill: colors.tick }}
+            stroke={colors.axis}
+            interval={4}
+          />
           {/* Left axis: kW */}
           <YAxis yAxisId="left" tick={{ fontSize: 12, fill: colors.tick }} stroke={colors.axis} />
           {/* Right axis: kWh */}
@@ -146,8 +202,16 @@ export default function EnergyUsageChart({
             />
           )}
 
-          {/* Bars: instantaneous power (kW) */}
-          <Bar yAxisId="left" dataKey="total_power_kw" name="Power (kW)" fill={colors.bar} radius={[6, 6, 0, 0]} />
+          {/* Bars: instantaneous power (kW). Use fixed pixel width to avoid "fat" bars when fewer points. */}
+          <Bar
+            yAxisId="left"
+            dataKey="total_power_kw"
+            name="Power (kW)"
+            fill={colors.bar}
+            radius={[6, 6, 0, 0]}
+            barSize={barPixelWidth}
+            maxBarSize={barPixelWidth}
+          />
 
           {/* Line: accumulated energy (kWh) on right axis */}
           {showAccumulation && (
