@@ -6,7 +6,7 @@ import { resolveWebSocketConfig } from '../config'
 import { useDashboardData } from '../hooks/useDashboardData'
 import { useDashboardRealtime } from '../hooks/useDashboardRealtime'
 import type { BlockRecord, EnergyReading } from '../types/dashboard'
-import { wipeSimulatorData } from '../utils/api'
+import { wipeSimulatorData, getMeterReadingsByRange } from '../utils/api'
 
 const DEFAULT_WS_URL = 'ws://localhost:3000'
 
@@ -95,6 +95,9 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
   })
 
   const [isWiping, setIsWiping] = useState(false)
+  const [historicalReadings, setHistoricalReadings] = useState<EnergyReading[]>([])
+  const [selectedBlockForHistory, setSelectedBlockForHistory] = useState<BlockRecord | null>(null)
+  const [loadingHistorical, setLoadingHistorical] = useState<boolean>(false)
 
   const meter = snapshot?.meter ?? null
   const meterDisplayName = meter?.client_name?.trim() ? meter.client_name : meter?.device_id ?? 'Unknown meter'
@@ -149,6 +152,23 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
   const handleMeterChange = (meterId: number) => {
     selectMeter(meterId)
     onSelectMeter?.(meterId)
+  }
+
+  async function loadHistoricalForBlock(block: BlockRecord) {
+    if (!meter) return
+    setLoadingHistorical(true)
+    setSelectedBlockForHistory(block)
+    try {
+      const startISO = new Date(block.block_start).toISOString()
+      const endISO = new Date(block.block_end).toISOString()
+      const { readings: rangeReadings } = await getMeterReadingsByRange(meter.id, startISO, endISO)
+      setHistoricalReadings(rangeReadings)
+    } catch (error) {
+      console.error('Failed to load historical readings for block:', error)
+      setHistoricalReadings([])
+    } finally {
+      setLoadingHistorical(false)
+    }
   }
 
   const handleWipeSimulatorData = async () => {
@@ -496,7 +516,12 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
                 const isWarning = blockPercentage > 90 && blockPercentage <= 100
 
                 return (
-                  <div key={block.block_start} className="border rounded-lg p-3 hover:shadow-md transition-shadow">
+                  <button
+                    key={block.block_start}
+                    className="text-left border rounded-lg p-3 hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    onClick={() => loadHistoricalForBlock(block)}
+                    title="Load historical chart for this 30-min block"
+                  >
                     <p className="text-xs text-gray-600 mb-2 font-medium">
                       {formatTime(block.block_start)} - {formatTime(block.block_end)}
                     </p>
@@ -525,7 +550,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
                         </Chip>
                       </div>
                     )}
-                  </div>
+                  </button>
                 )
               })}
             </div>
@@ -565,6 +590,43 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
             <div className="mt-4 pt-4 border-t border-gray-200 text-xs text-gray-500">
               <strong>Calculation:</strong> Stored total kWh is derived from all saved readings in the block.
             </div>
+          </section>
+        )}
+
+        {/* Historical Chart for selected 30-min block */}
+        {selectedBlockForHistory && (
+          <section className="bg-[#0b1220] text-white rounded-xl p-6 shadow-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Historical Usage — {formatTime(selectedBlockForHistory.block_start)} to {formatTime(selectedBlockForHistory.block_end)}</h3>
+              {loadingHistorical && (
+                <Chip variant="tint" color="warning">Loading…</Chip>
+              )}
+              {!loadingHistorical && (
+                <Chip variant="tint" color="brand">{historicalReadings.length} readings</Chip>
+              )}
+            </div>
+            {historicalReadings.length > 0 ? (
+              <EnergyUsageChart
+                readings={historicalReadings}
+                blockInfo={{
+                  start: new Date(selectedBlockForHistory.block_start).toISOString(),
+                  end: new Date(selectedBlockForHistory.block_end).toISOString(),
+                  isPeakHour: !!selectedBlockForHistory.is_peak_hour
+                }}
+                currentBlock={selectedBlockForHistory}
+                dark={true}
+                defaultAccumulationOn={true}
+                fixedWidthPerMinute={true}
+                barPixelWidth={8}
+              />
+            ) : (
+              <div className="h-64 flex items-center justify-center bg-[#0b1220] rounded-lg border-2 border-dashed border-[#1f2937] text-center">
+                <div>
+                  <p className="text-gray-300 font-medium">No readings found for this block.</p>
+                  <p className="text-sm text-gray-400 mt-1">If data exist in DB, this chart will always render.</p>
+                </div>
+              </div>
+            )}
           </section>
         )}
 

@@ -162,3 +162,17 @@ export async function getMeterReadings(meterId: number, limit = 50) {
     query ? `/api/meters/${meterId}/readings?${query}` : `/api/meters/${meterId}/readings`
   )
 }
+
+export async function getMeterReadingsByRange(
+  meterId: number,
+  startISO: string,
+  endISO: string
+): Promise<{ meter: Meter; readings: EnergyReading[] }> {
+  const searchParams = new URLSearchParams()
+  searchParams.set('start', startISO)
+  searchParams.set('end', endISO)
+  const query = searchParams.toString()
+  return fetchJson<{ meter: Meter; readings: EnergyReading[] }>(
+    `/api/meters/${meterId}/readings/range?${query}`
+  )
+}

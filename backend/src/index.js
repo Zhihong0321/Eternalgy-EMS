@@ -18,6 +18,7 @@ const {
   getMeterById,
   getMeterByDeviceId,
   getRecentReadings,
+  getReadingsByTimeRange,
   getLastNBlocks,
   getMetersWithStats,
   updateMeterName,
@@ -685,6 +686,41 @@ app.get('/api/meters/:meterId/readings', async (req, res) => {
     res.json({ meter, readings });
   } catch (error) {
     console.error('Failed to fetch meter readings:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Readings for a meter within a specific time range (historical chart)
+app.get('/api/meters/:meterId/readings/range', async (req, res) => {
+  try {
+    const meterId = Number(req.params.meterId);
+    if (Number.isNaN(meterId)) {
+      return res.status(400).json({ error: 'Invalid meter ID' });
+    }
+
+    const { start, end } = req.query;
+    if (!start || !end) {
+      return res.status(400).json({ error: 'Missing start or end query parameters' });
+    }
+
+    const startTime = new Date(String(start));
+    const endTime = new Date(String(end));
+    if (!(startTime instanceof Date) || Number.isNaN(startTime.getTime())) {
+      return res.status(400).json({ error: 'Invalid start time' });
+    }
+    if (!(endTime instanceof Date) || Number.isNaN(endTime.getTime())) {
+      return res.status(400).json({ error: 'Invalid end time' });
+    }
+
+    const meter = await getMeterById(meterId);
+    if (!meter) {
+      return res.status(404).json({ error: 'Meter not found' });
+    }
+
+    const readings = await getReadingsByTimeRange(meterId, startTime.toISOString(), endTime.toISOString());
+    res.json({ meter, readings });
+  } catch (error) {
+    console.error('Failed to fetch meter readings by range:', error);
     res.status(500).json({ error: error.message });
   }
 });
