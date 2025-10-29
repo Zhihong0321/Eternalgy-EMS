@@ -1,21 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import Badge from '../components/Badge'
 import Chip from '../components/Chip'
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  ReferenceLine
-} from 'recharts'
+// Chart is now rendered via EnergyUsageChart component
 import { resolveWebSocketConfig } from '../config'
 import { useDashboardData } from '../hooks/useDashboardData'
 import { useDashboardRealtime } from '../hooks/useDashboardRealtime'
 import type { BlockRecord, EnergyReading } from '../types/dashboard'
 import { wipeSimulatorData } from '../utils/api'
+import EnergyUsageChart from '../components/EnergyUsageChart'
 
 const DEFAULT_WS_URL = 'ws://localhost:3000'
 
@@ -157,7 +149,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
     }
   }
 
-  const hasReadings = chartData.length > 0
+  // Chart component handles empty-state rendering
 
   return (
     <div className="px-4 py-6">
@@ -419,51 +411,15 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
           </div>
         </section>
 
-        {/* Power chart */}
+        {/* Energy usage chart (dark theme, accumulation line, peak highlight) */}
         <section className="bg-white shadow rounded-lg p-6">
-          <h3 className="text-lg font-semibold mb-4">Stored Power Readings (kW)</h3>
-          {hasReadings ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="time" tick={{ fontSize: 12 }} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 12 }} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#fff',
-                    border: '1px solid #ccc',
-                    borderRadius: '4px'
-                  }}
-                />
-                {currentBlock && (
-                  <>
-                    <ReferenceLine
-                      y={parseFloat(currentBlock.avg_power_kw)}
-                      stroke="#6366f1"
-                      strokeDasharray="3 3"
-                      label={{ value: 'Avg', position: 'right', fontSize: 12 }}
-                    />
-                    <ReferenceLine
-                      y={parseFloat(currentBlock.max_power_kw)}
-                      stroke="#ef4444"
-                      strokeDasharray="3 3"
-                      label={{ value: 'Max', position: 'right', fontSize: 12 }}
-                    />
-                  </>
-                )}
-                <Bar dataKey="total_power_kw" fill="#2563eb" />
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="h-64 flex items-center justify-center bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 text-center">
-              <div>
-                <p className="text-gray-600 font-medium">No stored readings yet.</p>
-                <p className="text-sm text-gray-500 mt-1">
-                  Historical data will appear instantly after the first simulator upload.
-                </p>
-              </div>
-            </div>
-          )}
+          <h3 className="text-lg font-semibold mb-4">Energy Usage</h3>
+          <EnergyUsageChart
+            readings={readings}
+            readingIntervalSeconds={currentInterval ?? undefined}
+            isPeakHour={isPeakHour}
+            defaultShowAccumulation={true}
+          />
         </section>
 
         {/* Last ten blocks */}
