@@ -107,30 +107,33 @@ export default function EnergyUsageChart({
       windowEnd > windowStart
     ) {
       const slotMs = 60_000 // 1 minute slots
-      const slots: ChartPoint[] = []
-      let j = 0
-      let lastCumulative = 0
-      const n = points.length
 
+      // Bucket readings by minute start timestamp, keeping the latest reading within the minute.
+      const minuteBuckets = new Map<number, { kw: number; cum: number }>()
+      for (let i = 0; i < points.length; i++) {
+        const p = points[i]
+        const minuteStart = Math.floor(p.timestamp / slotMs) * slotMs
+        const prev = minuteBuckets.get(minuteStart)
+        // Always keep the latest reading for the minute
+        if (!prev || p.timestamp >= minuteStart) {
+          minuteBuckets.set(minuteStart, { kw: p.total_power_kw, cum: p.cumulative_kwh })
+        }
+      }
+
+      const slots: ChartPoint[] = []
+      let lastCumulative = 0
       for (let t = windowStart; t <= windowEnd; t += slotMs) {
-        // Advance through points up to current slot time
-        let kwForThisMinute: number | null = null
-        while (j < n && points[j].timestamp <= t) {
-          lastCumulative = points[j].cumulative_kwh
-          // Use the latest reading that falls within this minute
-          const minuteTs = Math.floor(points[j].timestamp / slotMs) * slotMs
-          if (minuteTs === Math.floor(t / slotMs) * slotMs) {
-            kwForThisMinute = points[j].total_power_kw
-          }
-          j++
+        const bucket = minuteBuckets.get(t)
+        if (bucket) {
+          lastCumulative = bucket.cum
         }
 
         const label = new Date(t).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
         slots.push({
           timestamp: t,
           timeLabel: label,
-          total_power_kw: kwForThisMinute ?? 0,
-          kwh_increment: 0, // show per-minute increment as 0 to avoid misleading spikes
+          total_power_kw: bucket ? bucket.kw : 0,
+          kwh_increment: 0,
           cumulative_kwh: lastCumulative
         })
       }
