@@ -3,6 +3,7 @@ import Simulator from './pages/Simulator'
 import Dashboard from './pages/Dashboard'
 import Meters from './pages/Meters'
 import './App.css'
+import BuildInfo from './components/BuildInfo'
 
 type Page = 'simulator' | 'dashboard' | 'devices'
 
@@ -76,6 +77,7 @@ function App() {
           <Meters selectedMeterId={selectedMeterId} onSelectMeter={goToDashboard} />
         )}
         {currentPage === 'simulator' && <Simulator />}
+        <BuildInfo />
       </main>
     </div>
   )
