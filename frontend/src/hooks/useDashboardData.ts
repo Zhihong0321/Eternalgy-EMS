@@ -40,6 +40,10 @@ export function useDashboardData(initialMeterId?: number): UseDashboardDataResul
   // Cooldown to avoid spamming failing endpoints
   const cooldownUntilRef = useRef<number>(0)
   const failuresRef = useRef<number>(0)
+  // Prevent overlapping snapshot requests and excessively frequent refreshes
+  const refreshInFlightRef = useRef<boolean>(false)
+  const lastRefreshStartAtRef = useRef<number>(0)
+  const MIN_SNAPSHOT_INTERVAL_MS = 1500
 
   const initializeMeters = useCallback(async () => {
     try {
@@ -98,6 +102,17 @@ export function useDashboardData(initialMeterId?: number): UseDashboardDataResul
       return
     }
 
+    // Skip silent refreshes if a request is already in-flight or if we refreshed too recently
+    const now = Date.now()
+    if (options.silent) {
+      if (refreshInFlightRef.current) {
+        return
+      }
+      if (now - lastRefreshStartAtRef.current < MIN_SNAPSHOT_INTERVAL_MS) {
+        return
+      }
+    }
+
     const requestId = ++requestIdRef.current
     if (!options.silent) {
       setLoading(true)
@@ -110,8 +125,11 @@ export function useDashboardData(initialMeterId?: number): UseDashboardDataResul
     }
 
     try {
+      refreshInFlightRef.current = true
+      lastRefreshStartAtRef.current = now
       const snapshotResponse = await getDashboardSnapshot({ meterId: targetMeterId, limit: 120 })
       if (requestIdRef.current !== requestId) {
+        refreshInFlightRef.current = false
         return
       }
 
@@ -139,18 +157,18 @@ export function useDashboardData(initialMeterId?: number): UseDashboardDataResul
       const message = err instanceof Error ? err.message : 'Failed to load dashboard snapshot'
       const isAbort = err instanceof DOMException && err.name === 'AbortError'
       const isNetworkError = err instanceof TypeError
-      // During silent refreshes (triggered by realtime updates), ignore abort/network errors to avoid noisy UI
-      if (options.silent && (isAbort || isNetworkError)) {
-        return
+      // Even for silent refreshes, track failures so we can engage cooldown
+      // Avoid noisy UI: only surface error message for non-silent refreshes
+      if (!options.silent) {
+        setError(message)
       }
-      setError(message)
-      // Increment failures and start cooldown after too many consecutive failures
       failuresRef.current += 1
       if (failuresRef.current >= 3) {
         // 15s cooldown window to prevent repeated failing requests
         cooldownUntilRef.current = Date.now() + 15000
       }
     } finally {
+      refreshInFlightRef.current = false
       if (!options.silent && requestIdRef.current === requestId) {
         setLoading(false)
       }

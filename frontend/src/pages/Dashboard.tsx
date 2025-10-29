@@ -2,13 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import Badge from '../components/Badge'
 import Chip from '../components/Chip'
 import EnergyUsageChart from '../components/EnergyUsageChart'
-import { resolveWebSocketConfig } from '../config'
 import { useDashboardData } from '../hooks/useDashboardData'
-import { useDashboardRealtime } from '../hooks/useDashboardRealtime'
 import type { BlockRecord, EnergyReading } from '../types/dashboard'
 import { wipeSimulatorData, getMeterReadingsByRange } from '../utils/api'
 
-const DEFAULT_WS_URL = 'ws://localhost:3000'
+// Reworked dashboard: historical-only charts based on stored readings.
 
 type DashboardProps = {
   selectedMeterId?: number | null
@@ -67,12 +65,6 @@ function deriveTargetProgress(block: BlockRecord | null, targetKwh: number) {
 }
 
 export default function Dashboard({ selectedMeterId: externalSelectedMeterId = null, onSelectMeter }: DashboardProps) {
-  const { primaryUrl, fallbackUrls } = useMemo(() => {
-    const config = resolveWebSocketConfig()
-    const baseUrl = config.primaryUrl || DEFAULT_WS_URL
-    const fallbacks = config.fallbackUrls.filter((url) => url && url !== baseUrl)
-    return { primaryUrl: baseUrl, fallbackUrls: fallbacks }
-  }, [])
 
   const {
     meters,
@@ -87,12 +79,6 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
     refresh,
     lastUpdated
   } = useDashboardData(externalSelectedMeterId ?? undefined)
-
-  const { isConnected, activeEndpoint, connectionError, logs, lastEvent } = useDashboardRealtime(primaryUrl, {
-    fallbackUrls,
-    requestSnapshot: (options) => refresh({ silent: options?.silent, meterId: options?.meterId }),
-    onSimulatorsUpdate: updateConnectedSimulators
-  })
 
   const [isWiping, setIsWiping] = useState(false)
   const [historicalReadings, setHistoricalReadings] = useState<EnergyReading[]>([])
@@ -131,7 +117,21 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
     [currentBlock]
   )
 
-  const minutesRemaining = useMemo(() => calculateMinutesRemaining(blockInfo), [blockInfo])
+  // Select the most recent COMPLETED 30-min block for historical chart
+  useEffect(() => {
+    if (lastTenBlocks && lastTenBlocks.length > 0) {
+      setSelectedBlockForHistory(lastTenBlocks[lastTenBlocks.length - 1])
+    }
+  }, [lastTenBlocks])
+
+  // Poll for new stored data periodically without websockets
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // Silent refresh; useDashboardData has concurrency and throttle guards
+      refresh({ silent: true })
+    }, 60_000) // every 60s
+    return () => clearInterval(interval)
+  }, [refresh])
   const lastUpdatedLabel = lastUpdated
     ? lastUpdated.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     : 'Never'
@@ -157,7 +157,6 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
   async function loadHistoricalForBlock(block: BlockRecord) {
     if (!meter) return
     setLoadingHistorical(true)
-    setSelectedBlockForHistory(block)
     try {
       const startISO = new Date(block.block_start).toISOString()
       const endISO = new Date(block.block_end).toISOString()
@@ -170,6 +169,16 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
       setLoadingHistorical(false)
     }
   }
+
+  // Load readings when the selected historical block changes
+  useEffect(() => {
+    if (selectedBlockForHistory) {
+      loadHistoricalForBlock(selectedBlockForHistory)
+    } else {
+      setHistoricalReadings([])
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBlockForHistory, meter?.id])
 
   const handleWipeSimulatorData = async () => {
     if (isWiping) return
@@ -213,24 +222,14 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
           </div>
         )}
 
-        {/* Connection & data status */}
+        {/* Data status */}
         <section className="bg-white shadow rounded-lg p-6 space-y-4">
           <div className="flex flex-wrap items-center gap-3">
-            <Badge
-              variant="lg"
-              color={isConnected ? 'available' : 'offline'}
-              text={isConnected ? 'Realtime Connected' : 'Realtime Offline'}
-            />
-
             <Badge
               variant="lg"
               color={hasDashboardsReady ? 'available' : 'offline'}
               text={`${dashboardsOnline} Dashboard${dashboardsOnline === 1 ? '' : 's'} Online`}
             />
-
-            <Chip variant="tint" color="brand">
-              Endpoint: {activeEndpoint || primaryUrl}
-            </Chip>
 
             {meter && (
               <>
@@ -268,13 +267,9 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
               Snapshot refreshed: {lastUpdatedLabel}
             </Chip>
 
-            {connectionError && (
-              <Chip variant="filled" color="warning">
-                {connectionError}
-              </Chip>
-            )}
+            {/* Realtime connection removed from charting; errors no longer displayed here */}
           </div>
-
+          {/* Connected simulators list retained for visibility, but does not affect charts */}
           <div className="grid md:grid-cols-2 gap-6">
             <div>
               <h3 className="text-sm font-semibold text-gray-700 mb-2">Connected Simulators</h3>
@@ -289,41 +284,6 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
               ) : (
                 <p className="text-sm text-gray-500">No simulators currently connected. Historical data remains available.</p>
               )}
-            </div>
-
-            <div>
-              <h3 className="text-sm font-semibold text-gray-700 mb-2">Realtime Activity</h3>
-              <div className="bg-gray-50 border border-gray-200 rounded-md max-h-32 overflow-y-auto text-sm text-gray-700 p-3 space-y-1">
-                {logs.length === 0 ? (
-                  <p className="text-gray-500">Waiting for realtime events…</p>
-                ) : (
-                  logs
-                    .slice()
-                    .reverse()
-                    .map((entry) => (
-                      <div key={entry.id} className="flex justify-between gap-4">
-                        <span
-                          className={
-                            entry.tone === 'error'
-                              ? 'text-red-600'
-                              : entry.tone === 'warning'
-                              ? 'text-yellow-600'
-                              : 'text-gray-800'
-                          }
-                        >
-                          {entry.message}
-                        </span>
-                        <span className="text-gray-400">
-                          {new Date(entry.timestamp).toLocaleTimeString('en-US', {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            second: '2-digit'
-                          })}
-                        </span>
-                      </div>
-                    ))
-                )}
-              </div>
             </div>
           </div>
         </section>
@@ -354,7 +314,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
 
             <div className="flex-1">
               <p className="text-sm text-gray-500">
-                Charts refresh from stored readings on every snapshot. Use realtime events to track when new data is saved.
+                Charts refresh from stored readings on every snapshot. Realtime (websocket) is no longer used for chart updates.
               </p>
               {latestReading && (
                 <p className="text-sm text-gray-600 mt-1">
@@ -383,31 +343,25 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
           </div>
         </section>
 
-        {/* Current block summary */}
+        {/* Latest completed 30-min block summary (historical-only) */}
         <section className="bg-white shadow rounded-lg p-6 space-y-6">
           <div className="flex flex-wrap justify-between items-start gap-4">
             <div>
               <h3 className="text-2xl font-bold text-gray-900">
-                {blockInfo ? `${formatTime(blockInfo.start)} - ${formatTime(blockInfo.end)}` : 'No block data yet'}
+                {selectedBlockForHistory
+                  ? `${formatTime(selectedBlockForHistory.block_start)} - ${formatTime(selectedBlockForHistory.block_end)}`
+                  : 'No block data yet'}
               </h3>
-              <p className="text-sm text-gray-600 mt-1">Current 30-minute block (calculated from stored readings)</p>
+              <p className="text-sm text-gray-600 mt-1">Latest completed 30-minute block (stored readings only)</p>
             </div>
 
             <div className="flex gap-3 flex-wrap items-center">
-              <Badge variant="lg" color={isPeakHour ? 'available' : 'offline'} text={isPeakHour ? 'PEAK HOUR' : 'OFF-PEAK'} />
-              {minutesRemaining > 0 && (
-                <Chip variant="filled" color="brand">
-                  {minutesRemaining} min left
-                </Chip>
+              {selectedBlockForHistory && (
+                <Badge variant="lg" color={selectedBlockForHistory.is_peak_hour ? 'available' : 'offline'} text={selectedBlockForHistory.is_peak_hour ? 'PEAK HOUR' : 'OFF-PEAK'} />
               )}
               {loading && (
                 <Chip variant="tint" color="warning">
                   Refreshing snapshot…
-                </Chip>
-              )}
-              {lastEvent && (
-                <Chip variant="tint" color={lastEvent.tone === 'error' ? 'danger' : 'brand'}>
-                  Last event: {lastEvent.message}
                 </Chip>
               )}
             </div>
@@ -415,11 +369,11 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
 
           <div className="flex justify-between items-center flex-wrap gap-6">
             <div>
-              <h4 className="text-lg font-semibold text-gray-900">Current Usage</h4>
-              <p className="text-sm text-gray-600">{currentBlock?.reading_count || 0} readings contributing</p>
+              <h4 className="text-lg font-semibold text-gray-900">Block Usage</h4>
+              <p className="text-sm text-gray-600">{selectedBlockForHistory?.reading_count || 0} readings contributing</p>
             </div>
             <div className="text-right">
-              <p className="text-4xl font-bold text-blue-600">{currentKwh.toFixed(3)} kWh</p>
+              <p className="text-4xl font-bold text-blue-600">{selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh).toFixed(3) : '0.000'} kWh</p>
               <p className="text-sm text-gray-600">of {targetKwh} kWh target</p>
             </div>
           </div>
@@ -428,15 +382,29 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
             <div className="absolute inset-0 flex items-center">
               <div
                 className={`h-full transition-all duration-500 flex items-center justify-center text-white font-bold ${
-                  percentage < 70 ? 'bg-green-500' : percentage < 90 ? 'bg-yellow-500' : percentage < 100 ? 'bg-orange-500' : 'bg-red-500'
+                  (() => {
+                    const blockKwh = selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh) : 0
+                    const pct = targetKwh > 0 ? (blockKwh / targetKwh) * 100 : 0
+                    return pct < 70 ? 'bg-green-500' : pct < 90 ? 'bg-yellow-500' : pct < 100 ? 'bg-orange-500' : 'bg-red-500'
+                  })()
                 }`}
-                style={{ width: `${Math.min(percentage, 100)}%` }}
+                style={{
+                  width: `${(() => {
+                    const blockKwh = selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh) : 0
+                    const pct = targetKwh > 0 ? (blockKwh / targetKwh) * 100 : 0
+                    return Math.min(pct, 100)
+                  })()}%`
+                }}
               >
-                {currentKwh.toFixed(2)} kWh
+                {selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh).toFixed(2) : '0.00'} kWh
               </div>
-              {percentage < 100 && (
+              {(() => {
+                const blockKwh = selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh) : 0
+                const pct = targetKwh > 0 ? (blockKwh / targetKwh) * 100 : 0
+                return pct < 100
+              })() && (
                 <div className="flex-1 h-full bg-gray-200 flex items-center justify-center text-gray-600 text-sm">
-                  {(targetKwh - currentKwh).toFixed(2)} kWh remaining
+                  {(targetKwh - (selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh) : 0)).toFixed(2)} kWh remaining
                 </div>
               )}
             </div>
@@ -447,62 +415,105 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
 
           <div className="mt-4 flex justify-between items-center flex-wrap gap-4">
             <div className="flex items-center gap-2">
-              {percentage < 70 && (
+              {(() => {
+                const blockKwh = selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh) : 0
+                const pct = targetKwh > 0 ? (blockKwh / targetKwh) * 100 : 0
+                return pct < 70
+              })() && (
                 <Chip variant="tint" color="success">
-                  ✅ {(100 - percentage).toFixed(0)}% buffer remaining
+                  ✅ {(100 - (() => {
+                    const blockKwh = selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh) : 0
+                    const pct = targetKwh > 0 ? (blockKwh / targetKwh) * 100 : 0
+                    return pct
+                  })()).toFixed(0)}% buffer remaining
                 </Chip>
               )}
-              {percentage >= 70 && percentage < 90 && (
+              {(() => {
+                const blockKwh = selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh) : 0
+                const pct = targetKwh > 0 ? (blockKwh / targetKwh) * 100 : 0
+                return pct >= 70 && pct < 90
+              })() && (
                 <Chip variant="tint" color="warning">
-                  ⚠️ {(100 - percentage).toFixed(0)}% to target
+                  ⚠️ {(100 - (() => {
+                    const blockKwh = selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh) : 0
+                    const pct = targetKwh > 0 ? (blockKwh / targetKwh) * 100 : 0
+                    return pct
+                  })()).toFixed(0)}% to target
                 </Chip>
               )}
-              {percentage >= 90 && percentage < 100 && (
+              {(() => {
+                const blockKwh = selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh) : 0
+                const pct = targetKwh > 0 ? (blockKwh / targetKwh) * 100 : 0
+                return pct >= 90 && pct < 100
+              })() && (
                 <Chip variant="filled" color="warning">
-                  🔔 {(100 - percentage).toFixed(0)}% left!
+                  🔔 {(100 - (() => {
+                    const blockKwh = selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh) : 0
+                    const pct = targetKwh > 0 ? (blockKwh / targetKwh) * 100 : 0
+                    return pct
+                  })()).toFixed(0)}% left!
                 </Chip>
               )}
-              {percentage >= 100 && (
+              {(() => {
+                const blockKwh = selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh) : 0
+                const pct = targetKwh > 0 ? (blockKwh / targetKwh) * 100 : 0
+                return pct >= 100
+              })() && (
                 <Chip variant="filled" color="danger">
-                  🚨 {(percentage - 100).toFixed(0)}% OVER!
+                  🚨 {(() => {
+                    const blockKwh = selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh) : 0
+                    const pct = targetKwh > 0 ? (blockKwh / targetKwh) * 100 : 0
+                    return (pct - 100).toFixed(0)
+                  })()}% OVER!
                 </Chip>
               )}
             </div>
             <div className="text-sm text-gray-600">
-              <span className="font-semibold">{percentage.toFixed(1)}%</span> of target used
+              <span className="font-semibold">{(() => {
+                const blockKwh = selectedBlockForHistory ? parseFloat(selectedBlockForHistory.total_kwh) : 0
+                const pct = targetKwh > 0 ? (blockKwh / targetKwh) * 100 : 0
+                return pct.toFixed(1)
+              })()}%</span> of target used
             </div>
           </div>
         </section>
 
-        {/* Energy usage chart (updated design) */}
-        <section className="bg-[#111827] text-white rounded-xl p-6 shadow-lg">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold">Energy Usage</h3>
-            <div className="flex gap-2">
-              <button className="px-3 py-1 rounded-full text-sm bg-[#1f2937] hover:bg-[#374151]">Week</button>
-              <button className="px-3 py-1 rounded-full text-sm bg-[#1f2937] hover:bg-[#374151]">Month</button>
-              <button className="px-3 py-1 rounded-full text-sm bg-[#2563eb] text-white">Year</button>
+        {/* Latest 30-min historical chart (stored readings only) */}
+        {selectedBlockForHistory && (
+          <section className="bg-[#0b1220] text-white rounded-xl p-6 shadow-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Latest 30-Min Historical Usage — {formatTime(selectedBlockForHistory.block_start)} to {formatTime(selectedBlockForHistory.block_end)}</h3>
+              {loadingHistorical && (
+                <Chip variant="tint" color="warning">Loading…</Chip>
+              )}
+              {!loadingHistorical && (
+                <Chip variant="tint" color="brand">{historicalReadings.length} readings</Chip>
+              )}
             </div>
-          </div>
-          {hasReadings ? (
-            <EnergyUsageChart
-              readings={readings}
-              blockInfo={blockInfo || undefined}
-              currentBlock={currentBlock || undefined}
-              dark={true}
-              defaultAccumulationOn={true}
-            />
-          ) : (
-            <div className="h-64 flex items-center justify-center bg-[#0b1220] rounded-lg border-2 border-dashed border-[#1f2937] text-center">
-              <div>
-                <p className="text-gray-300 font-medium">No stored readings yet.</p>
-                <p className="text-sm text-gray-400 mt-1">
-                  Historical data will appear instantly after the first simulator upload.
-                </p>
+            {historicalReadings.length > 0 ? (
+              <EnergyUsageChart
+                readings={historicalReadings}
+                blockInfo={{
+                  start: new Date(selectedBlockForHistory.block_start).toISOString(),
+                  end: new Date(selectedBlockForHistory.block_end).toISOString(),
+                  isPeakHour: !!selectedBlockForHistory.is_peak_hour
+                }}
+                currentBlock={selectedBlockForHistory}
+                dark={true}
+                defaultAccumulationOn={true}
+                fixedWidthPerMinute={true}
+                barPixelWidth={8}
+              />
+            ) : (
+              <div className="h-64 flex items-center justify-center bg-[#0b1220] rounded-lg border-2 border-dashed border-[#1f2937] text-center">
+                <div>
+                  <p className="text-gray-300 font-medium">No readings found for latest block.</p>
+                  <p className="text-sm text-gray-400 mt-1">If data exist in DB, this chart will always render.</p>
+                </div>
               </div>
-            </div>
-          )}
-        </section>
+            )}
+          </section>
+        )}
 
         {/* Last ten blocks */}
         {lastTenBlocks.length > 0 && (
@@ -593,42 +604,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
           </section>
         )}
 
-        {/* Historical Chart for selected 30-min block */}
-        {selectedBlockForHistory && (
-          <section className="bg-[#0b1220] text-white rounded-xl p-6 shadow-lg">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">Historical Usage — {formatTime(selectedBlockForHistory.block_start)} to {formatTime(selectedBlockForHistory.block_end)}</h3>
-              {loadingHistorical && (
-                <Chip variant="tint" color="warning">Loading…</Chip>
-              )}
-              {!loadingHistorical && (
-                <Chip variant="tint" color="brand">{historicalReadings.length} readings</Chip>
-              )}
-            </div>
-            {historicalReadings.length > 0 ? (
-              <EnergyUsageChart
-                readings={historicalReadings}
-                blockInfo={{
-                  start: new Date(selectedBlockForHistory.block_start).toISOString(),
-                  end: new Date(selectedBlockForHistory.block_end).toISOString(),
-                  isPeakHour: !!selectedBlockForHistory.is_peak_hour
-                }}
-                currentBlock={selectedBlockForHistory}
-                dark={true}
-                defaultAccumulationOn={true}
-                fixedWidthPerMinute={true}
-                barPixelWidth={8}
-              />
-            ) : (
-              <div className="h-64 flex items-center justify-center bg-[#0b1220] rounded-lg border-2 border-dashed border-[#1f2937] text-center">
-                <div>
-                  <p className="text-gray-300 font-medium">No readings found for this block.</p>
-                  <p className="text-sm text-gray-400 mt-1">If data exist in DB, this chart will always render.</p>
-                </div>
-              </div>
-            )}
-          </section>
-        )}
+        {/* Optional: block selection retained below via lastTenBlocks cards */}
 
         {!currentBlock && !loading && (
           <div className="mt-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
