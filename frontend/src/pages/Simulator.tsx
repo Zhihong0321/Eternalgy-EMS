@@ -61,7 +61,14 @@ export default function Simulator() {
   const [tempInterval, setTempInterval] = useState(60) // temporary interval while dragging slider
   const [sentCount, setSentCount] = useState(0)
   const [simulationMode, setSimulationMode] = useState<'auto' | 'manual'>('auto')
-  const [fastForwardSpeed, setFastForwardSpeed] = useState(1) // 1x to 30x
+  const [fastForwardSpeed, setFastForwardSpeed] = useState(30) // 1x to 60x (default 30x)
+  // Simulated clock (history date)
+  const [simStartDate, setSimStartDate] = useState<string>(() => new Date().toISOString().slice(0, 10))
+  const [nextSimTimestamp, setNextSimTimestamp] = useState<number>(() => {
+    const d = new Date()
+    d.setHours(0, 0, 0, 0)
+    return d.getTime()
+  })
   const [handshakeStatus, setHandshakeStatus] = useState<HandshakeState>('idle')
   const [handshakeDetails, setHandshakeDetails] = useState('')
   const [eventLog, setEventLog] = useState<string[]>([])
@@ -208,6 +215,17 @@ export default function Simulator() {
       pushLog('Auto-send paused')
     }
   }, [isRunning, interval, simulationMode, fastForwardSpeed, pushLog])
+
+  // Reset simulated clock whenever the start date changes
+  useEffect(() => {
+    try {
+      const d = new Date(`${simStartDate}T00:00:00`)
+      setNextSimTimestamp(d.getTime())
+      pushLog(`Simulated date set to ${d.toDateString()} • clock reset to 00:00`)
+    } catch (e) {
+      // Fallback: keep previous timestamp
+    }
+  }, [simStartDate, pushLog])
 
   const requestHandshake = useCallback((source: 'auto' | 'manual' = 'manual') => {
     const didSend = send({
@@ -401,7 +419,7 @@ export default function Simulator() {
   useEffect(() => {
     if (!isRunning || !isConnected) return
 
-    const effectiveInterval = interval * 1000 / fastForwardSpeed
+    const effectiveInterval = (interval * 1000) / Math.max(1, fastForwardSpeed)
 
     const timer = window.setInterval(() => {
       const currentPower = simulationMode === 'manual' ? manualPower : power
@@ -410,53 +428,28 @@ export default function Simulator() {
       const variation = simulationMode === 'auto' ? (Math.random() - 0.5) * 2 * (volatility / 100) : 0
       const finalPower = currentPower * (1 + variation)
 
-      // When fast-forwarding, send multiple readings
-      const readingsToSend = fastForwardSpeed > 1 ? Math.ceil(fastForwardSpeed) : 1
+      // Send exactly ONE reading per effective tick, using the simulated clock.
+      const didSend = send({
+        type: 'simulator:reading',
+        deviceId,
+        deviceName: deviceId,
+        simulatorName,
+        totalPowerKw: parseFloat(finalPower.toFixed(2)),
+        timestamp: nextSimTimestamp,
+        frequency: parseFloat(frequency.toFixed(2)),
+        readingInterval: interval,
+      })
 
-      let failedToSend = false
-      let successfulDispatches = 0
-      for (let i = 0; i < readingsToSend; i++) {
-        const timeOffset = i * (interval * 1000)
-        const didSend = send({
-          type: 'simulator:reading',
-          deviceId,
-          deviceName: deviceId,
-          simulatorName,
-          totalPowerKw: parseFloat(finalPower.toFixed(2)),
-          timestamp: Date.now() + timeOffset,
-          frequency: parseFloat(frequency.toFixed(2)),
-          readingInterval: interval,
-        })
-
-        if (!didSend) {
-          failedToSend = true
-          break
-        } else {
-          successfulDispatches += 1
-        }
-      }
-
-      if (successfulDispatches > 0) {
-        let queuedRange: string | null = null
-        setAttemptedCount((prev) => {
-          const next = prev + successfulDispatches
-          const start = prev + 1
-          const end = next
-          queuedRange = start === end ? `#${end}` : `#${start}-${end}`
-          return next
-        })
-        if (queuedRange) {
-          pushLog(`Dispatched ${successfulDispatches} reading${successfulDispatches > 1 ? 's' : ''} (${queuedRange}) awaiting acknowledgement`)
-        }
-      }
-
-      if (failedToSend) {
+      if (didSend) {
+        setAttemptedCount((prev) => prev + 1)
+        setNextSimTimestamp((prev) => prev + interval * 1000)
+      } else {
         pushLog('Reading dispatch skipped: WebSocket not connected. Simulator will retry automatically.')
       }
     }, effectiveInterval)
 
     return () => window.clearInterval(timer)
-  }, [isRunning, isConnected, power, manualPower, volatility, interval, deviceId, simulatorName, frequency, send, simulationMode, fastForwardSpeed, pushLog])
+  }, [isRunning, isConnected, power, manualPower, volatility, interval, deviceId, simulatorName, frequency, send, simulationMode, fastForwardSpeed, pushLog, nextSimTimestamp])
 
   const handleSendOnce = () => {
     const variation = (Math.random() - 0.5) * 2 * (volatility / 100)
@@ -468,7 +461,7 @@ export default function Simulator() {
       deviceName: deviceId,
       simulatorName,
       totalPowerKw: parseFloat(currentPower.toFixed(2)),
-      timestamp: Date.now(),
+      timestamp: nextSimTimestamp,
       frequency: parseFloat(frequency.toFixed(2)),
       readingInterval: interval,
     })
@@ -480,6 +473,7 @@ export default function Simulator() {
         queuedSequence = `#${next}`
         return next
       })
+      setNextSimTimestamp((prev) => prev + interval * 1000)
       if (queuedSequence) {
         pushLog(`Manual reading dispatched (${queuedSequence}) awaiting acknowledgement`)
       }
@@ -782,6 +776,38 @@ export default function Simulator() {
             )}
           </div>
 
+          {/* Simulation Start Date (History) */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Simulation Start Date
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={simStartDate}
+                onChange={(e) => setSimStartDate(e.target.value)}
+                disabled={isRunning}
+                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+              />
+              <button
+                onClick={() => {
+                  const d = new Date(`${simStartDate}T00:00:00`)
+                  setNextSimTimestamp(d.getTime())
+                  pushLog('Simulated clock reset to start of selected date')
+                }}
+                className="px-3 py-2 border border-gray-300 rounded-md hover:bg-gray-50 text-sm"
+              >
+                Reset Clock
+              </button>
+            </div>
+            <p className="text-xs text-gray-600 mt-2">
+              Readings are time-stamped using the simulated clock starting at 00:00 on the selected date.
+            </p>
+            <p className="text-xs text-gray-600 mt-1">
+              Next simulated timestamp: {new Date(nextSimTimestamp).toLocaleString()}
+            </p>
+          </div>
+
           {/* Fast Forward Speed */}
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -790,7 +816,7 @@ export default function Simulator() {
             <input
               type="range"
               min="1"
-              max="30"
+              max="60"
               step="1"
               value={fastForwardSpeed}
               onChange={(e) => setFastForwardSpeed(Number(e.target.value))}
@@ -798,12 +824,11 @@ export default function Simulator() {
             />
             <div className="flex justify-between text-xs text-gray-500 mt-1">
               <span>1x (Real-time)</span>
-              <span>15x</span>
-              <span>30x (Max)</span>
+              <span>30x (Default)</span>
+              <span>60x (Max)</span>
             </div>
             <p className="text-xs text-gray-600 mt-2">
-              ⚡ Fast forward generates future data at {fastForwardSpeed}x speed
-              {fastForwardSpeed > 1 && ` (${Math.ceil(fastForwardSpeed)} readings per interval)`}
+              ⚡ Fast forward runs the simulated clock at {fastForwardSpeed}x. For a {interval}s interval, one reading is sent every {(interval / Math.max(1, fastForwardSpeed)).toFixed(2)}s, stamped with the simulated time.
             </p>
           </div>
 
