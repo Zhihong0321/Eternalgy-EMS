@@ -115,6 +115,42 @@ export async function getHealth(): Promise<{ status: string; timestamp: string }
   return fetchJson('/api/health')
 }
 
+// Global warm-up helper to avoid spamming /api/health.
+// - Deduplicates concurrent callers
+// - Throttles calls to at most once per window
+let healthWarmupPromise: Promise<any> | null = null
+let lastHealthWarmupAt = 0
+
+export async function warmUpBackendOnce(options: { maxFrequencyMs?: number } = {}): Promise<void> {
+  const maxFrequencyMs = options.maxFrequencyMs ?? 30000 // default: 30s window
+  const now = Date.now()
+
+  // If a warm-up is already in flight, return the same promise
+  if (healthWarmupPromise) {
+    try {
+      await healthWarmupPromise
+    } catch {
+      // ignore warm-up errors
+    }
+    return
+  }
+
+  // If we recently warmed up within the allowed window, skip
+  if (now - lastHealthWarmupAt < maxFrequencyMs) {
+    return
+  }
+
+  lastHealthWarmupAt = now
+  healthWarmupPromise = getHealth()
+    .catch(() => undefined)
+    .finally(() => {
+      // Allow a new warm-up after callers have awaited this one
+      healthWarmupPromise = null
+    })
+
+  await healthWarmupPromise
+}
+
 interface SnapshotParams {
   meterId?: number
   deviceId?: string
