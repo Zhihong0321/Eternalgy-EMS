@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useWebSocket } from './useWebSocket'
 import type { SimulatorInfo } from '../types/dashboard'
 
@@ -39,6 +39,10 @@ export function useDashboardRealtime(
   })
 
   const [logs, setLogs] = useState<RealtimeLogEntry[]>([])
+  // Debounce refreshes triggered by frequent realtime updates to avoid spamming /snapshot
+  const refreshDebounceRef = useRef<number | null>(null)
+  const lastImmediateRefreshAtRef = useRef<number>(0)
+  const MIN_REFRESH_INTERVAL_MS = 1500
 
   const appendLog = useCallback((entry: Omit<RealtimeLogEntry, 'id'>) => {
     logCounter += 1
@@ -85,7 +89,25 @@ export function useDashboardRealtime(
         if (onSimulatorsUpdate) {
           onSimulatorsUpdate(lastMessage.simulators || [])
         }
-        requestSnapshot({ meterId: lastMessage.meter?.id, silent: false })
+        // Force immediate snapshot on initial payload, but guard against rapid repeats
+        {
+          const now = Date.now()
+          if (refreshDebounceRef.current) {
+            clearTimeout(refreshDebounceRef.current)
+            refreshDebounceRef.current = null
+          }
+          if (now - lastImmediateRefreshAtRef.current >= MIN_REFRESH_INTERVAL_MS) {
+            lastImmediateRefreshAtRef.current = now
+            requestSnapshot({ meterId: lastMessage.meter?.id, silent: false })
+          } else {
+            // Coalesce into a trailing refresh if initial arrives too quickly again
+            refreshDebounceRef.current = window.setTimeout(() => {
+              lastImmediateRefreshAtRef.current = Date.now()
+              requestSnapshot({ meterId: lastMessage.meter?.id, silent: false })
+              refreshDebounceRef.current = null
+            }, MIN_REFRESH_INTERVAL_MS)
+          }
+        }
         break
       case 'dashboard:simulators-updated':
         appendLog({
@@ -103,7 +125,14 @@ export function useDashboardRealtime(
           message: `New reading stored for meter ${lastMessage.meter?.device_id || 'unknown'}`,
           tone: 'info'
         })
-        requestSnapshot({ silent: true })
+        // Debounce snapshot refreshes triggered by frequent updates
+        if (refreshDebounceRef.current) {
+          clearTimeout(refreshDebounceRef.current)
+        }
+        refreshDebounceRef.current = window.setTimeout(() => {
+          requestSnapshot({ silent: true })
+          refreshDebounceRef.current = null
+        }, MIN_REFRESH_INTERVAL_MS)
         break
       case 'error':
         appendLog({
@@ -120,6 +149,16 @@ export function useDashboardRealtime(
         })
     }
   }, [appendLog, lastMessage, onSimulatorsUpdate, requestSnapshot])
+
+  useEffect(() => {
+    // Cleanup any pending debounced refresh on unmount
+    return () => {
+      if (refreshDebounceRef.current) {
+        clearTimeout(refreshDebounceRef.current)
+        refreshDebounceRef.current = null
+      }
+    }
+  }, [])
 
   const lastEvent = useMemo(() => (logs.length > 0 ? logs[logs.length - 1] : undefined), [logs])
 

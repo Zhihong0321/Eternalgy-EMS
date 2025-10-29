@@ -133,6 +133,12 @@ export function useDashboardData(initialMeterId?: number): UseDashboardDataResul
       setLastUpdated(new Date(snapshotResponse.timestamp))
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load dashboard snapshot'
+      const isAbort = err instanceof DOMException && err.name === 'AbortError'
+      const isNetworkError = err instanceof TypeError
+      // During silent refreshes (triggered by realtime updates), ignore abort/network errors to avoid noisy UI
+      if (options.silent && (isAbort || isNetworkError)) {
+        return
+      }
       setError(message)
     } finally {
       if (!options.silent && requestIdRef.current === requestId) {
