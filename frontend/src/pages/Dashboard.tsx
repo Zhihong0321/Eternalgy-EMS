@@ -530,7 +530,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
                   <button
                     key={block.block_start}
                     className="text-left border rounded-lg p-3 hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    onClick={() => loadHistoricalForBlock(block)}
+                    onClick={() => setSelectedBlockForHistory(block)}
                     title="Load historical chart for this 30-min block"
                   >
                     <p className="text-xs text-gray-600 mb-2 font-medium">
