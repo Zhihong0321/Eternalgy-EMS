@@ -322,6 +322,33 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
           </div>
         </section>
 
+        {/* BUILD MARKER: TEST NEW CHART */}
+        <section className="bg-white shadow rounded-lg p-6 space-y-4">
+          <h3 className="text-xl font-bold text-red-600">TEST NEW CHART</h3>
+          <p className="text-sm text-gray-600">
+            If you can see this section, the new frontend build is LIVE. Below chart uses current snapshot readings (no websocket).
+          </p>
+
+          {readings.length > 0 ? (
+            <div className="bg-[#0b1220] text-white rounded-xl p-4">
+              <EnergyUsageChart
+                readings={readings}
+                dark={true}
+                defaultAccumulationOn={false}
+                fixedWidthPerMinute={false}
+                barPixelWidth={10}
+              />
+            </div>
+          ) : (
+            <div className="h-32 flex items-center justify-center border-2 border-dashed rounded-lg">
+              <div className="text-center">
+                <p className="text-gray-700 font-medium">No snapshot readings available.</p>
+                <p className="text-xs text-gray-500 mt-1">Checks: ensure /api/dashboard/snapshot returns readings[]. Select a meter with data or run simulator.</p>
+              </div>
+            </div>
+          )}
+        </section>
+
         {/* Latest completed 30-min block summary (historical-only) */}
         <section className="bg-white shadow rounded-lg p-6 space-y-6">
           <div className="flex flex-wrap justify-between items-start gap-4">
