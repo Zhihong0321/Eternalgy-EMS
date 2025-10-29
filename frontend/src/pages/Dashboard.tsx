@@ -47,22 +47,7 @@ function formatTime(dateString: string) {
   })
 }
 
-function calculateMinutesRemaining(blockInfo?: { end: string } | null) {
-  if (!blockInfo) return 0
-  const blockEnd = new Date(blockInfo.end).getTime()
-  const diff = blockEnd - Date.now()
-  return diff > 0 ? Math.floor(diff / 60000) : 0
-}
-
-function deriveTargetProgress(block: BlockRecord | null, targetKwh: number) {
-  if (!block) {
-    return { currentKwh: 0, percentage: 0 }
-  }
-
-  const currentKwh = parseFloat(block.total_kwh)
-  const percentage = targetKwh > 0 ? (currentKwh / targetKwh) * 100 : 0
-  return { currentKwh, percentage }
-}
+// Removed unused helper functions since charts operate only on stored readings
 
 export default function Dashboard({ selectedMeterId: externalSelectedMeterId = null, onSelectMeter }: DashboardProps) {
 
@@ -73,7 +58,6 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
     snapshot,
     readings,
     connectedSimulators,
-    updateConnectedSimulators,
     loading,
     error,
     refresh,
@@ -112,10 +96,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
   const targetKwh = targetKwhRaw != null
     ? (typeof targetKwhRaw === 'string' ? parseFloat(targetKwhRaw) : Number(targetKwhRaw))
     : 200
-  const { currentKwh, percentage } = useMemo(
-    () => deriveTargetProgress(currentBlock, targetKwh),
-    [currentBlock]
-  )
+  // Progress to target is computed inline where needed
 
   // Select the most recent COMPLETED 30-min block for historical chart
   useEffect(() => {
@@ -136,7 +117,6 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
     ? lastUpdated.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     : 'Never'
 
-  const isPeakHour = blockInfo?.isPeakHour || false
   const currentInterval = meter?.reading_interval ?? null
 
   useEffect(() => {
@@ -199,7 +179,7 @@ export default function Dashboard({ selectedMeterId: externalSelectedMeterId = n
     }
   }
 
-  const hasReadings = chartData.length > 0
+  // Removed unused hasReadings; chartData length is shown contextually
 
   return (
     <div className="px-4 py-6">

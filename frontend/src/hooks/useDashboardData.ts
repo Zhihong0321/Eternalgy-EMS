@@ -155,8 +155,6 @@ export function useDashboardData(initialMeterId?: number): UseDashboardDataResul
       cooldownUntilRef.current = 0
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load dashboard snapshot'
-      const isAbort = err instanceof DOMException && err.name === 'AbortError'
-      const isNetworkError = err instanceof TypeError
       // Even for silent refreshes, track failures so we can engage cooldown
       // Avoid noisy UI: only surface error message for non-silent refreshes
       if (!options.silent) {
